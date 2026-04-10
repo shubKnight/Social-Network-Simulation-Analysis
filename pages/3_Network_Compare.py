@@ -21,7 +21,7 @@ with st.sidebar:
     k = st.slider("Neighbors (K)", 2, 20, 6, 2)
     steps = st.slider("Steps", 100, 1000, 500, 50)
     T = st.slider("Temptation (T)", 0.5, 2.0, 1.3, 0.05)
-    mutation = st.slider("Mutation (μ)", 0.0, 0.05, 0.005, 0.005)
+    temp = st.slider("Temperature", 0.01, 1.0, 0.05, 0.01)
     p_ws = st.slider("WS Randomness (p)", 0.0, 1.0, 0.0, 0.01, help="Watts-Strogatz only")
     runs = st.slider("Runs per topology", 1, 10, 3)
 
@@ -35,9 +35,8 @@ if st.button("🚀 Run Comparison", type="primary"):
         all_histories = []
         for run_i in range(runs):
             engine = SimulationEngine(n=n, k=k, p=p_ws, T=T, R=1.0, P=0.0, S=0.0,
-                                       mutation_rate=mutation, init_coop_fraction=0.8,
-                                       graph_type=gtype, update_rule="best_neighbor",
-                                       rounds_per_update=5)
+                                       init_coop_fraction=0.8, graph_type=gtype,
+                                       temperature=temp, temp_decay=1.0)
             history = []
             for s in range(steps):
                 rate = engine.step()

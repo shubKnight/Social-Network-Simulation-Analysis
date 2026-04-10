@@ -1,42 +1,41 @@
-# 🔬 The Topology of Trust
+# 🔬 Graph-Aware Multi-Agent Deep Reinforcement Learning (MADRL)
 
-> *Does the structure of a social network determine whether cooperation survives or collapses?*
+> *Can Neural Networks learn to trust each other based on their position in a social network?*
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-red.svg)](https://streamlit.io)
+[![PyTorch](https://img.shields.io/badge/PyTorch-Deep%20Learning-orange.svg)](https://pytorch.org)
 [![NetworkX](https://img.shields.io/badge/NetworkX-Graph%20Theory-green.svg)](https://networkx.org)
 
 ---
 
 ## 🧠 The Big Question
 
-Trust thrives in tight-knit communities but collapses when global "shortcuts" (like social media) are introduced. This project uses **Pure Evolutionary Game Theory** on networks to find the exact **mathematical tipping point** where cooperation collapses.
+Social trust is fragile. In deep reinforcement learning, do agents learn different cooperative strategies depending on whether they live in a "Village" (high clustering, Lattice) or a "City" (Scale-Free network, influencers)?
+
+This project is a high-fidelity **MADRL Simulation** implementing a centralized PyTorch Deep Q-Network. All 100+ agents share the same neural "brain", but are fed their local topological features (Node Degree, Clustering Coefficient) to learn context-aware strategies.
 
 ## 🏗️ Architecture
 
 | Component | Technology | Purpose |
 |---|---|---|
-| **Graph Engine** | NetworkX | Watts-Strogatz, Barabási-Albert, Erdős-Rényi, Grid networks |
-| **Agents** | Python | Minimal evolutionary agents with strategy + payoff |
-| **Game Engine** | NumPy | IPD with Nowak & May spatial imitation + Fermi dynamics |
-| **Analytics** | NumPy + NetworkX | Gini coefficient, entropy, cluster analysis |
-| **Dashboard** | Streamlit + Plotly | 4-page interactive research dashboard |
+| **Graph Engine** | NetworkX | Watts-Strogatz, Barabási-Albert, Erdős-Rényi, Grid |
+| **Agents** | Python | Extracts topological context to feed into PyTorch |
+| **Game Engine** | PyTorch | Iterated Prisoner's Dilemma with $\epsilon$-greedy exploration and Experience Replay |
+| **Analytics** | NumPy + NetworkX | Gini inequality, entropy, cluster sizes |
+| **Dashboard** | Streamlit + Plotly | Real-time Neural Network training visualizer and network heatmaps |
 
 ## 🔬 How It Works
 
-Each agent has a fixed strategy (Cooperate or Defect). Every round:
-1. **Play**: All agents play the Prisoner's Dilemma with their neighbors
-2. **Imitate**: Each agent copies the strategy of their most successful neighbor (Nowak & May 1992)
-3. **Mutate**: Small chance of random strategy flip (prevents absorbing states)
+Instead of hard-coded rules, the simulation uses Deep Q-Learning:
+1. **Observe**: Each agent observes $S_t = [\text{last\_action}, \text{coop\_neighbor\_ratio}, \text{norm\_degree}, \text{clustering}]$
+2. **Act**: The Shared PyTorch DQN predicts Q-Values. Agents Cooperate or Defect via $\epsilon$-greedy policy.
+3. **Reward**: Prisoners Dilemma payoff.
+4. **Learn**: Transitions $(S, A, R, S')$ are stored in a Replay Buffer. Mini-batches train the network via Mean Squared Error loss.
 
-**No reinforcement learning, no Q-tables** — pure evolutionary dynamics.
+### Topological Awareness
 
-### Why Topology Matters
-
-In a **ring lattice** (Village): cooperators form clusters where interior cooperators earn 6×R = 6.0,
-outperforming boundary defectors who earn ~4.2. The cluster expands.
-
-In a **random network** (City): no clusters form, defectors exploit shortcuts to reach fresh cooperators.
+Because the Neural Network receives the agent's degree and local clustering coefficient as inputs, it learns to associate its network structure with the safety of cooperation. It actively *learns* that cooperating in a highly clustered village is safe, but cooperating as a hub node is dangerous!
 
 ## 🚀 Quick Start
 
@@ -48,50 +47,16 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## 📖 Dashboard Pages
+## 📖 Dashboard Features
 
 ### 🧪 1. Live Simulation
-Interactive Plotly network graph, Gini inequality, clustering metrics, wealth distribution.
+Watch the PyTorch neural network train live! Features a real-time DQN training loss curve, epsilon-decay tracking, and Plotly interactive network graph.
 
 ### 📉 2. Phase Transition Finder
-Automated p-sweep producing the classic S-curve with critical threshold detection.
+Automatic network randomness sweeps (Watts-Strogatz p-value).
 
 ### 🌐 3. Network Comparison
-Side-by-side IPD on Small-World, Scale-Free, Random, and Grid topologies.
+Topology bake-off: Small-World vs Scale-Free vs Random vs Grid.
 
 ### 💥 4. Resilience Lab
-Shock test: build trust → inject defectors → measure recovery.
-
-## 🔬 Key Findings
-
-| Network | Cooperation | Why |
-|---|---|---|
-| **Small-World (p=0)** | ~83% | Tight clusters protect cooperators |
-| **Grid Lattice** | ~65% | Local structure sustained cooperation |
-| **Scale-Free** | ~0% | Hub nodes amplify defection cascades |
-| **Random** | ~35% | No stable clusters; bimodal outcomes |
-
-## 📁 Project Structure
-
-```
-TopologyOfTrust/
-├── app.py                     # Landing page
-├── pages/
-│   ├── 1_Simulation.py        # Live simulation
-│   ├── 2_Phase_Transition.py  # p-sweep
-│   ├── 3_Network_Compare.py   # Topology comparison
-│   └── 4_Resilience_Lab.py    # Shock testing
-├── engine.py                  # Evolutionary game engine
-├── agent.py                   # Minimal evolutionary agent
-├── environment.py             # Multi-topology graph engine
-├── analytics.py               # Gini, entropy, cluster analysis
-├── visualization.py           # Plotly visualizations
-└── requirements.txt
-```
-
-## 📚 References
-
-- Nowak, M.A. & May, R.M. (1992). *Evolutionary games and spatial chaos.* Nature.
-- Santos, F.C. & Pacheco, J.M. (2005). *Scale-free networks and cooperation.* PRL.
-- Watts, D.J. & Strogatz, S.H. (1998). *Collective dynamics of 'small-world' networks.* Nature.
-- Szabó, G. & Fáth, G. (2007). *Evolutionary games on graphs.* Physics Reports.
+Shock test: Inject 10 defectors and measure if the network recovers.

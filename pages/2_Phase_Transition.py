@@ -18,7 +18,7 @@ with c2:
     runs = st.slider("Runs per p (for averaging)", 1, 10, 5)
 with c3:
     T = st.slider("Temptation (T)", 0.5, 2.0, 1.3, 0.05)
-    mutation = st.slider("Mutation Rate (μ)", 0.0, 0.05, 0.005, 0.005)
+    temp = st.slider("Temperature", 0.01, 1.0, 0.05, 0.01)
 
 granularity = st.select_slider("Sweep Granularity",
     options=["Coarse (fast)", "Medium", "Fine (slow)"], value="Medium")
@@ -39,8 +39,7 @@ if st.button("🚀 Run Phase Transition Sweep", type="primary"):
     for pv in p_values:
         for run_i in range(runs):
             engine = SimulationEngine(n=n, k=k, p=pv, T=T, R=1.0, P=0.0, S=0.0,
-                                       mutation_rate=mutation, init_coop_fraction=0.8,
-                                       update_rule="best_neighbor", rounds_per_update=5)
+                                       init_coop_fraction=0.8, temperature=temp, temp_decay=1.0)
             for _ in range(steps):
                 rate = engine.step()
             results[pv].append(rate)
@@ -53,7 +52,7 @@ if st.button("🚀 Run Phase Transition Sweep", type="primary"):
     
     st.session_state.phase_results = {
         'p_values': p_values, 'avg_rates': avg_rates, 'std_rates': std_rates,
-        'params': {'n': n, 'k': k, 'T': T, 'steps': steps, 'runs': runs, 'mutation': mutation},
+        'params': {'n': n, 'k': k, 'T': T, 'steps': steps, 'runs': runs, 'temp': temp},
     }
     st.rerun()
 
@@ -82,4 +81,4 @@ if 'phase_results' in st.session_state:
         st.dataframe(df, use_container_width=True)
     
     st.caption(f"N={res['params']['n']}, K={res['params']['k']}, T={res['params']['T']}, "
-               f"μ={res['params']['mutation']}, Steps={res['params']['steps']}, Runs={res['params']['runs']}")
+               f"Temp={res['params']['temp']}, Steps={res['params']['steps']}, Runs={res['params']['runs']}")

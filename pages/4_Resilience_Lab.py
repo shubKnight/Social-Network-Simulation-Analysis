@@ -24,8 +24,7 @@ with st.sidebar:
 
 if st.button("🚀 Run Resilience Test", type="primary"):
     engine = SimulationEngine(n=n, k=k, p=p, T=T, R=1.0, P=0.0, S=0.0,
-                               mutation_rate=0.005, init_coop_fraction=0.8,
-                               update_rule="best_neighbor", rounds_per_update=5)
+                               init_coop_fraction=0.8, temperature=0.05, temp_decay=1.0)
     
     history = []
     shock_steps = []

@@ -5,3 +5,4 @@ streamlit
 pyvis
 plotly
 pandas
+torch

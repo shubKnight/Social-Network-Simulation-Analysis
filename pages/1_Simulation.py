@@ -32,24 +32,15 @@ graph_type = st.sidebar.selectbox("Graph Type",
                             "grid": "📐 Regular Grid"}[x],
     key="graph_type")
 
-st.sidebar.header("⚙️ Evolution Parameters")
-update_rule = st.sidebar.selectbox("Update Rule",
-    ["best_neighbor", "fermi"],
-    format_func=lambda x: {"best_neighbor": "🏆 Best Neighbor (Nowak & May)",
-                            "fermi": "🎲 Fermi Imitation (Santos & Pacheco)"}[x],
-    key="update_rule")
-
-mutation_rate = ss("Mutation Rate (μ)", 0.0, 0.1, 0.005, 0.005, "mutation",
-                    help="Prob of random strategy flip. Prevents absorbing states.")
+st.sidebar.header("🧠 Deep RL (PyTorch)")
+learning_rate_log = ss("Learning Rate (10^x)", -5.0, -1.0, -3.0, 0.1, "lr")
+learning_rate = 10 ** learning_rate_log
+batch_size = ss("Batch Size", 16, 256, 64, 16, "batch_size")
+gamma = ss("Discount Factor (γ)", 0.8, 0.99, 0.95, 0.01, "gamma")
+temperature = ss("Initial Temperature", 0.1, 5.0, 1.0, 0.1, "temp", 
+                   help="High = Random Exploration. Low = Deterministic Exploitation.")
+temp_decay = ss("Temperature Decay", 0.9, 0.999, 0.95, 0.005, "temp_decay")
 init_coop = ss("Initial Cooperator %", 0.0, 1.0, 0.8, 0.05, "init_coop")
-rounds = ss("Rounds per Update", 1, 20, 5, 1, "rounds",
-            help="Game rounds played before each strategy update. Higher = more stable results.")
-
-if update_rule == "fermi":
-    beta = ss("Imitation Strength (β)", 1.0, 50.0, 10.0, 1.0, "beta",
-              help="High = rational, Low = noisy")
-else:
-    beta = 10.0
 
 st.sidebar.header("🎲 Payoff Matrix")
 with st.sidebar.expander("T > R > P ≥ S", expanded=False):
@@ -69,10 +60,13 @@ def get_engine():
     if 'sim_engine' not in st.session_state or st.session_state.sim_engine is None:
         st.session_state.sim_engine = SimulationEngine(
             n=n, k=k, p=p, T=T, R=R, P=P, S=S,
-            beta=beta, mutation_rate=mutation_rate,
             init_coop_fraction=init_coop,
-            graph_type=graph_type, update_rule=update_rule,
-            rounds_per_update=rounds
+            graph_type=graph_type,
+            learning_rate=learning_rate,
+            batch_size=batch_size,
+            gamma=gamma,
+            temperature=temperature,
+            temp_decay=temp_decay
         )
         st.session_state.sim_history = []
         st.session_state.sim_step = 0
@@ -96,6 +90,8 @@ if run:
         st.session_state.sim_history.append({
             "Step": st.session_state.sim_step,
             "Cooperation Rate": rate,
+            "DQN Loss": engine.last_loss,
+            "Temperature": engine.temp
         })
         if i % max(1, num_steps // 50) == 0:
             bar.progress((i + 1) / num_steps, text=f"Step {i+1}/{num_steps}")
@@ -120,17 +116,18 @@ with col1:
     st.subheader("📈 Cooperation Over Time")
     if st.session_state.get('sim_history'):
         st.plotly_chart(create_cooperation_chart(st.session_state.sim_history), use_container_width=True)
-    else:
-        st.info("Click **Run** to start.")
 with col2:
-    st.subheader("💰 Wealth Distribution")
-    scores = engine.env.get_scores()
-    if any(s > 0 for s in scores):
-        st.plotly_chart(create_wealth_histogram(scores), use_container_width=True)
+    st.subheader("🧠 MADRL Training Stats")
+    if st.session_state.get('sim_history'):
+        import pandas as pd
+        df = pd.DataFrame(st.session_state.sim_history)
+        if "DQN Loss" in df.columns:
+            st.caption("DQN Training Loss")
+            st.line_chart(df.set_index("Step")["DQN Loss"])
+            st.caption("Temperature (Boltzmann Exploration)")
+            st.line_chart(df.set_index("Step")["Temperature"])
     else:
         st.info("No data yet.")
-
-# ── Cluster Analysis ──
 with st.expander("🔍 Cluster Analysis"):
     cc1, cc2 = st.columns(2)
     cc1.metric("Cooperator Clusters", metrics['num_cooperator_clusters'])
