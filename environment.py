@@ -67,6 +67,16 @@ class SocialNetwork:
         self.graph.nodes[node_id]['score'] += reward
         self.graph.nodes[node_id]['round_reward'] = reward
 
+    def remove_edge(self, u, v):
+        """Sever a relationship. Only if edge exists and both nodes keep min degree."""
+        if self.graph.has_edge(u, v):
+            self.graph.remove_edge(u, v)
+
+    def add_edge(self, u, v):
+        """Form a new relationship. No-op if already connected or self-loop."""
+        if u != v and not self.graph.has_edge(u, v):
+            self.graph.add_edge(u, v)
+
     def get_cooperation_rate(self):
         if self.n == 0:
             return 0

@@ -37,10 +37,16 @@ learning_rate_log = ss("Learning Rate (10^x)", -5.0, -1.0, -3.0, 0.1, "lr")
 learning_rate = 10 ** learning_rate_log
 batch_size = ss("Batch Size", 16, 256, 64, 16, "batch_size")
 gamma = ss("Discount Factor (γ)", 0.8, 0.99, 0.95, 0.01, "gamma")
-temperature = ss("Initial Temperature", 0.1, 5.0, 1.0, 0.1, "temp", 
-                   help="High = Random Exploration. Low = Deterministic Exploitation.")
-temp_decay = ss("Temperature Decay", 0.9, 0.999, 0.95, 0.005, "temp_decay")
-init_coop = ss("Initial Cooperator %", 0.0, 1.0, 0.8, 0.05, "init_coop")
+temperature = ss("Initial Temperature", 0.1, 5.0, 2.0, 0.1, "temp",
+                   help="High = Wide exploration (recommended start: 2.0). Low = Deterministic.")
+temp_decay = ss("Temperature Decay", 0.9, 0.999, 0.99, 0.001, "temp_decay",
+                   help="Slow decay (0.99) gives the GCN time to learn before committing.")
+init_coop = ss("Initial Cooperator %", 0.0, 1.0, 0.5, 0.05, "init_coop",
+                   help="50% is unbiased — avoids locking to all-coop from the start.")
+
+st.sidebar.header("🔀 Network Rewiring")
+rewiring_rate = ss("Rewiring Rate", 0.0, 1.0, 0.3, 0.05, "rewiring_rate",
+                   help="Fraction of exploited agents that attempt to cut defectors & seek cooperators.")
 
 st.sidebar.header("🎲 Payoff Matrix")
 with st.sidebar.expander("T > R > P ≥ S", expanded=False):
@@ -66,7 +72,8 @@ def get_engine():
             batch_size=batch_size,
             gamma=gamma,
             temperature=temperature,
-            temp_decay=temp_decay
+            temp_decay=temp_decay,
+            rewiring_rate=rewiring_rate
         )
         st.session_state.sim_history = []
         st.session_state.sim_step = 0
@@ -91,7 +98,8 @@ if run:
             "Step": st.session_state.sim_step,
             "Cooperation Rate": rate,
             "DQN Loss": engine.last_loss,
-            "Temperature": engine.temp
+            "Temperature": engine.temp,
+            "Rewiring Events": engine.last_rewire_count,
         })
         if i % max(1, num_steps // 50) == 0:
             bar.progress((i + 1) / num_steps, text=f"Step {i+1}/{num_steps}")
@@ -126,6 +134,8 @@ with col2:
             st.line_chart(df.set_index("Step")["DQN Loss"])
             st.caption("Temperature (Boltzmann Exploration)")
             st.line_chart(df.set_index("Step")["Temperature"])
+            st.caption("Rewiring Events per Step")
+            st.line_chart(df.set_index("Step")["Rewiring Events"])
     else:
         st.info("No data yet.")
 with st.expander("🔍 Cluster Analysis"):
@@ -136,3 +146,24 @@ with st.expander("🔍 Cluster Analysis"):
     cc2.metric("Largest Defect Cluster", metrics['largest_defector_cluster'])
     cc1.metric("Strategy Entropy", f"{metrics['strategy_entropy']:.3f}")
     cc2.metric("Avg Score", f"{metrics['avg_score']:.1f}")
+
+with st.expander("🧬 Personality Breakdown", expanded=True):
+    import pandas as pd
+    coop_rates = engine.get_personality_coop_rates()
+    counts = engine.get_personality_counts()
+    EMOJI = {"altruist": "🤝", "grudger": "😤", "opportunist": "🦊", "random": "🎲"}
+    DESC = {
+        "altruist":    "Cooperates generously; gets extra utility from neighbours cooperating.",
+        "grudger":     "Cooperates until betrayed, then defects permanently.",
+        "opportunist": "Pure payoff-maximiser; follows the GCN signal with no bias.",
+        "random":      "Noisy actor; occasionally ignores the GCN (15% random override).",
+    }
+    cols = st.columns(4)
+    for col, ptype in zip(cols, ["altruist", "grudger", "opportunist", "random"]):
+        with col:
+            rate = coop_rates.get(ptype, 0.0)
+            n_agents = counts.get(ptype, 0)
+            st.markdown(f"**{EMOJI[ptype]} {ptype.capitalize()}** ({n_agents}x)")
+            st.metric("Coop Rate", f"{rate:.0%}",
+                      delta=f"{rate - 0.5:+.0%} vs. 50%")
+            st.caption(DESC[ptype])

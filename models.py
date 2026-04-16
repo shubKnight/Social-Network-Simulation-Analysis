@@ -1,63 +1,72 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
 import random
 import numpy as np
 from collections import deque
 
+
 class GraphConv(nn.Module):
     """
-    A minimal implementation of a Graph Convolutional Layer.
-    Computes: H = ReLU( A_hat * X * W )
+    Graph Convolutional Layer.
+    Computes: H = ReLU( A_hat @ X @ W + b )
+    
+    The key insight: by multiplying X by A_hat first, each node's 
+    features become a weighted average of its neighbors' features.
+    This is how the GCN "sees" the local topology.
     """
     def __init__(self, in_features, out_features):
-        super(GraphConv, self).__init__()
+        super().__init__()
         self.weight = nn.Parameter(torch.FloatTensor(in_features, out_features))
         self.bias = nn.Parameter(torch.FloatTensor(out_features))
-        # Initialize weights
         nn.init.xavier_uniform_(self.weight)
         nn.init.zeros_(self.bias)
 
     def forward(self, A_hat, X):
         """
-        A_hat: Normalized Adjacency Matrix [Batch, N, N] or [N, N]
-        X: Node features [Batch, N, in_features] or [N, in_features]
+        A_hat : [N, N] or [B, N, N]  — normalized adjacency matrix
+        X     : [N, F] or [B, N, F]  — node feature matrix
         """
-        # Linear transformation
-        support = torch.matmul(X, self.weight)
-        # Graph convolution (message passing)
-        output = torch.matmul(A_hat, support) + self.bias
-        return output
+        support = torch.matmul(X, self.weight)         # [..., N, out]
+        return torch.matmul(A_hat, support) + self.bias
+
 
 class GraphDQN(nn.Module):
-    def __init__(self, state_dim=2, hidden_dim=32, action_dim=2):
-        """
-        Shared GCN for all agents.
-        State: [strategy, last_payoff] for each node.
-        Action: Q-values for [Defect (0), Cooperate (1)] for each node.
-        """
-        super(GraphDQN, self).__init__()
+    """
+    Shared GCN-DQN for all agents.
+
+    State per node (dim=4):
+        [strategy, last_payoff, reputation, personality_embedding]
+
+    Outputs Q-values per node: [Q(Defect), Q(Cooperate)]
+    """
+    def __init__(self, state_dim=4, hidden_dim=64, action_dim=2):
+        super().__init__()
         self.gc1 = GraphConv(state_dim, hidden_dim)
         self.gc2 = GraphConv(hidden_dim, hidden_dim)
-        self.fc = nn.Linear(hidden_dim, action_dim)
+        # Extra MLP head for richer Q-value estimation
+        self.fc1 = nn.Linear(hidden_dim, hidden_dim // 2)
+        self.fc2 = nn.Linear(hidden_dim // 2, action_dim)
 
     def forward(self, A_hat, X):
-        # Layer 1: Learn from immediate neighbors
+        # Layer 1: aggregate immediate neighbours
         x = F.relu(self.gc1(A_hat, X))
-        # Layer 2: Learn from neighbors of neighbors
+        # Layer 2: aggregate 2-hop neighbourhood
         x = F.relu(self.gc2(A_hat, x))
-        # Final output layer per node
-        return self.fc(x)
+        # MLP head
+        x = F.relu(self.fc1(x))
+        return self.fc2(x)
+
 
 class ReplayBuffer:
-    def __init__(self, capacity=10000):
+    def __init__(self, capacity=20000):
         self.buffer = deque(maxlen=capacity)
 
     def push(self, state, action, reward, next_state):
         """
-        Since A_hat is static per environment, we only store the feature matrix X.
-        state, action, reward, next_state are all arrays of shape [N, ...]
+        state / next_state : np.ndarray [N, state_dim]
+        action             : np.ndarray [N]  int64
+        reward             : np.ndarray [N]  float32
         """
         self.buffer.append((state, action, reward, next_state))
 
@@ -68,7 +77,7 @@ class ReplayBuffer:
             torch.FloatTensor(state),
             torch.LongTensor(action),
             torch.FloatTensor(reward),
-            torch.FloatTensor(next_state)
+            torch.FloatTensor(next_state),
         )
 
     def __len__(self):
