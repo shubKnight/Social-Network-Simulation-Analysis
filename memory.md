@@ -80,3 +80,30 @@ This document serves as the historical technical log and "brain memory" for the 
 - Verified: clustering coefficient dropped 0.532 → 0.185 over 300 steps = network genuinely reshaping
 - 442 rewiring events / 300 steps with rate=0.3, T=1.1
 - Dashboard: added Rewiring Rate slider + Rewiring Events per Step chart
+
+---
+
+### [Session 8] Removed Hardcoded Personalities — Emergent Behavior
+- Stripped all personality types (Altruist/Grudger/Opportunist/Random), reward shaping, action overrides
+- Each agent now builds a **behavioral profile from experience**:
+  - `strategy_trend` — rolling mean of last 20 actions (chronic coop vs defect)
+  - `payoff_trend` — rolling normalized payoff [-1, 1]
+  - `betrayal_rate` — fraction of cooperative moves that were exploited
+- State vector expanded: `[strategy, payoff, reputation, strategy_trend, payoff_trend, betrayal_rate]` (dim=6)
+- GCN now learns personality differentiation purely through gradient descent
+- Dashboard: replaced Personality Breakdown with **Emergent Behavior Profile** panel (Chronic Cooperators / Chronic Defectors / Swing Agents / High Betrayal counts)
+
+---
+
+### [Session 9] Rewiring Fixes + Payoff Mechanics
+- Bugs found and fixed in rewiring:
+  - `MAX_DEGREE` filter was `<` (strict) → candidates at exact max degree silently excluded → 0 rewires
+  - Reputation threshold `0.55` too high for early steps → lowered to `0.4`
+  - Rewiring only triggered on `was_suckered` → stopped when defectors dominated; expanded to include any cooperator adjacent to chronic defector (`betrayal_rate > 0.5`)
+- Added **degree-weighted payoff**: `reward / n_neighbors` — isolated defectors earn less per round, creating real network-position pressure
+- Added `temp_warmup=100`: temperature held constant for first 100 steps so GCN fills replay buffer before annealing
+- Raised `gamma` default: `0.95 → 0.99` so GCN values long-run cooperation clusters
+- Raised `temp_decay` default: `0.99 → 0.995` (slower annealing)
+- Dashboard: added Warmup slider; updated all defaults to confirmed working params
+- Current best params: `T=1.1, S=-0.2, temp=2.0, decay=0.995, warmup=100, rewiring=0.4, gamma=0.99`
+- Results: 33.6% final coop, peak 62%, 3,593 rewiring events / 800 steps — realistic volatile dynamics

@@ -36,24 +36,26 @@ st.sidebar.header("🧠 Deep RL (PyTorch)")
 learning_rate_log = ss("Learning Rate (10^x)", -5.0, -1.0, -3.0, 0.1, "lr")
 learning_rate = 10 ** learning_rate_log
 batch_size = ss("Batch Size", 16, 256, 64, 16, "batch_size")
-gamma = ss("Discount Factor (γ)", 0.8, 0.99, 0.95, 0.01, "gamma")
+gamma = ss("Discount Factor (γ)", 0.8, 0.999, 0.99, 0.001, "gamma")
 temperature = ss("Initial Temperature", 0.1, 5.0, 2.0, 0.1, "temp",
-                   help="High = Wide exploration (recommended start: 2.0). Low = Deterministic.")
-temp_decay = ss("Temperature Decay", 0.9, 0.999, 0.99, 0.001, "temp_decay",
-                   help="Slow decay (0.99) gives the GCN time to learn before committing.")
+                   help="High = Wide exploration (recommended: 2.0).")
+temp_decay = ss("Temperature Decay", 0.9, 0.999, 0.995, 0.001, "temp_decay",
+                   help="Slow decay gives the GCN time to train before committing.")
+temp_warmup = ss("Warmup Steps (no decay)", 0, 200, 100, 10, "temp_warmup",
+                    help="Temperature held constant for N steps so GCN fills replay buffer first.")
 init_coop = ss("Initial Cooperator %", 0.0, 1.0, 0.5, 0.05, "init_coop",
-                   help="50% is unbiased — avoids locking to all-coop from the start.")
+                   help="50% = unbiased start.")
 
 st.sidebar.header("🔀 Network Rewiring")
-rewiring_rate = ss("Rewiring Rate", 0.0, 1.0, 0.3, 0.05, "rewiring_rate",
-                   help="Fraction of exploited agents that attempt to cut defectors & seek cooperators.")
+rewiring_rate = ss("Rewiring Rate", 0.0, 1.0, 0.4, 0.05, "rewiring_rate",
+                   help="Fraction of exploited cooperators that cut chronic defectors & seek trustworthy replacements.")
 
 st.sidebar.header("🎲 Payoff Matrix")
 with st.sidebar.expander("T > R > P ≥ S", expanded=False):
-    T = ss_exp("Temptation (T)", 0.5, 3.0, 1.3, 0.05, "T")
-    R = ss_exp("Reward (R)", 0.5, 3.0, 1.0, 0.05, "R")
+    T = ss_exp("Temptation (T)", 0.5, 3.0, 1.1, 0.05, "T")
+    R = ss_exp("Reward (R)",    0.5, 3.0, 1.0, 0.05, "R")
     P = ss_exp("Punishment (P)", 0.0, 2.0, 0.0, 0.05, "P")
-    S = ss_exp("Sucker (S)", -1.0, 1.0, 0.0, 0.05, "S")
+    S = ss_exp("Sucker (S)",   -1.0, 1.0, -0.2, 0.05, "S")
 
 # ── Reset ──
 if st.sidebar.button("🔄 Reset Simulation", type="primary"):
@@ -73,6 +75,7 @@ def get_engine():
             gamma=gamma,
             temperature=temperature,
             temp_decay=temp_decay,
+            temp_warmup=temp_warmup,
             rewiring_rate=rewiring_rate
         )
         st.session_state.sim_history = []
@@ -147,23 +150,22 @@ with st.expander("🔍 Cluster Analysis"):
     cc1.metric("Strategy Entropy", f"{metrics['strategy_entropy']:.3f}")
     cc2.metric("Avg Score", f"{metrics['avg_score']:.1f}")
 
-with st.expander("🧬 Personality Breakdown", expanded=True):
-    import pandas as pd
-    coop_rates = engine.get_personality_coop_rates()
-    counts = engine.get_personality_counts()
-    EMOJI = {"altruist": "🤝", "grudger": "😤", "opportunist": "🦊", "random": "🎲"}
-    DESC = {
-        "altruist":    "Cooperates generously; gets extra utility from neighbours cooperating.",
-        "grudger":     "Cooperates until betrayed, then defects permanently.",
-        "opportunist": "Pure payoff-maximiser; follows the GCN signal with no bias.",
-        "random":      "Noisy actor; occasionally ignores the GCN (15% random override).",
-    }
-    cols = st.columns(4)
-    for col, ptype in zip(cols, ["altruist", "grudger", "opportunist", "random"]):
-        with col:
-            rate = coop_rates.get(ptype, 0.0)
-            n_agents = counts.get(ptype, 0)
-            st.markdown(f"**{EMOJI[ptype]} {ptype.capitalize()}** ({n_agents}x)")
-            st.metric("Coop Rate", f"{rate:.0%}",
-                      delta=f"{rate - 0.5:+.0%} vs. 50%")
-            st.caption(DESC[ptype])
+with st.expander("🧠 Emergent Behavior Profile", expanded=True):
+    profile = engine.get_behavioral_profile()
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric("🤝 Chronic Cooperators", profile['chronic_cooperators'],
+              help="Agents with strategy_trend > 70% (self-selected altruists)")
+    e2.metric("👿 Chronic Defectors", profile['chronic_defectors'],
+              help="Agents with strategy_trend < 30% (self-selected defectors)")
+    e3.metric("⚖️ Swing Agents",  profile['swing_agents'],
+              help="Everyone in between — opportunists, learning, transitioning")
+    e4.metric("🗡️ High Betrayal", profile['high_betrayal'],
+              help="Agents who cooperated often but >40% of those moves were exploited")
+    st.caption(
+        f"Avg Strategy Trend: {profile['avg_strategy_trend']:.2f} · "
+        f"Avg Betrayal Rate: {profile['avg_betrayal_rate']:.2f} · "
+        f"Avg Payoff Trend: {profile['avg_payoff_trend']:.2f}"
+    )
+    st.info("💡 These archetypes emerged from learning with no pre-assignment. "
+            "Chronic Cooperators formed naturally in dense trust clusters; "
+            "Chronic Defectors may be isolated nodes or hub exploiters.")

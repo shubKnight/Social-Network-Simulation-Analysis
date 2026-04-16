@@ -35,12 +35,14 @@ class GraphDQN(nn.Module):
     """
     Shared GCN-DQN for all agents.
 
-    State per node (dim=4):
-        [strategy, last_payoff, reputation, personality_embedding]
+    State per node (dim=6):
+        [strategy, last_payoff, reputation,
+         strategy_trend, payoff_trend, betrayal_rate]
 
+    All features emerge from each agent's own experience — no pre-assignment.
     Outputs Q-values per node: [Q(Defect), Q(Cooperate)]
     """
-    def __init__(self, state_dim=4, hidden_dim=64, action_dim=2):
+    def __init__(self, state_dim=6, hidden_dim=64, action_dim=2):
         super().__init__()
         self.gc1 = GraphConv(state_dim, hidden_dim)
         self.gc2 = GraphConv(hidden_dim, hidden_dim)
