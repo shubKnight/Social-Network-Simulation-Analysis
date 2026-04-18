@@ -22,8 +22,8 @@ def ss_exp(label, mn, mx, default, step, key, **kw):
 st.sidebar.header("🌐 Network")
 n = ss("Nodes (N)", 10, 300, 100, 10, "n")
 k = ss("Neighbors (K)", 2, 20, 6, 2, "k")
-p = ss("Randomness (p)", 0.0, 1.0, 0.0, 0.01, "p")
-
+p = ss("Randomness (p) [Social Media Effect]", 0.0, 1.0, 0.0, 0.01, "p",
+         help="High randomness mimics social media. NOTE: Press Reset Simulation below to apply changes!")
 graph_type = st.sidebar.selectbox("Graph Type", 
     ["watts_strogatz", "barabasi_albert", "erdos_renyi", "grid"],
     format_func=lambda x: {"watts_strogatz": "🔗 Small-World (Watts-Strogatz)", 
@@ -103,6 +103,7 @@ if run:
             "DQN Loss": engine.last_loss,
             "Temperature": engine.temp,
             "Rewiring Events": engine.last_rewire_count,
+            "Stranger %": engine.get_random_edge_fraction(),
         })
         if i % max(1, num_steps // 50) == 0:
             bar.progress((i + 1) / num_steps, text=f"Step {i+1}/{num_steps}")
@@ -111,12 +112,13 @@ if run:
 
 # ── Metrics ──
 metrics = compute_all_metrics(engine.env)
-m1, m2, m3, m4, m5 = st.columns(5)
+m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric("Step", st.session_state.get('sim_step', 0))
 m2.metric("Coop Rate", f"{metrics['cooperation_rate']:.0%}")
 m3.metric("Gini Index", f"{metrics['gini_coefficient']:.3f}")
 m4.metric("Clustering", f"{metrics['clustering_coefficient']:.3f}")
 m5.metric("Avg Path", f"{metrics['avg_path_length']:.2f}")
+m6.metric("Stranger Edges", f"{engine.get_random_edge_fraction():.1%}")
 
 # ── Network Graph ──
 st.plotly_chart(create_network_figure(engine.env), use_container_width=True)
@@ -139,6 +141,9 @@ with col2:
             st.line_chart(df.set_index("Step")["Temperature"])
             st.caption("Rewiring Events per Step")
             st.line_chart(df.set_index("Step")["Rewiring Events"])
+            if "Stranger %" in df.columns:
+                st.caption("Stranger Edge Ratio (Social Media Effect)")
+                st.line_chart(df.set_index("Step")["Stranger %"])
     else:
         st.info("No data yet.")
 with st.expander("🔍 Cluster Analysis"):

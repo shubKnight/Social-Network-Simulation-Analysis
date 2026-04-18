@@ -22,17 +22,30 @@ class SocialNetwork:
         self.graph = self._generate_graph()
         
     def _generate_graph(self):
-        """Generates a graph based on the specified type and initializes node attributes."""
+        """Generates a graph based on the specified type and initializes node attributes.
+        
+        For Watts-Strogatz, edges are tagged as 'local' (original lattice neighbours)
+        or 'random' (long-range rewired connections). This models the real-world
+        distinction between trusted neighbours and random strangers (social media).
+        """
         if self.graph_type == "watts_strogatz":
-            G = nx.watts_strogatz_graph(n=self.n, k=self.k, p=self.p)
+            G = self._build_tagged_watts_strogatz()
         elif self.graph_type == "barabasi_albert":
             # m = number of edges to attach from a new node (use k//2 for comparable density)
             m = max(1, self.k // 2)
             G = nx.barabasi_albert_graph(n=self.n, m=m)
+            # Tag all edges as local (no random distinction for BA)
+            for u, v in G.edges():
+                G.edges[u, v]['edge_type'] = 'local'
+                G.edges[u, v]['edge_trust'] = 1.0
         elif self.graph_type == "erdos_renyi":
             # p_edge chosen so expected degree ≈ k
             p_edge = self.k / (self.n - 1)
             G = nx.erdos_renyi_graph(n=self.n, p=p_edge)
+            # All connections are random strangers in ER
+            for u, v in G.edges():
+                G.edges[u, v]['edge_type'] = 'random'
+                G.edges[u, v]['edge_trust'] = 0.1
         elif self.graph_type == "grid":
             # Create a 2D grid with roughly n nodes
             side = int(np.ceil(np.sqrt(self.n)))
@@ -43,6 +56,9 @@ class SocialNetwork:
             # Trim to exactly n nodes
             nodes_to_remove = list(G.nodes())[self.n:]
             G.remove_nodes_from(nodes_to_remove)
+            for u, v in G.edges():
+                G.edges[u, v]['edge_type'] = 'local'
+                G.edges[u, v]['edge_trust'] = 1.0
         else:
             raise ValueError(f"Unknown graph type: {self.graph_type}")
         
@@ -52,6 +68,46 @@ class SocialNetwork:
             G.nodes[node]['score'] = 0.0
             G.nodes[node]['round_reward'] = 0.0
             
+        return G
+
+    def _build_tagged_watts_strogatz(self):
+        """
+        Custom Watts-Strogatz that tags edges as 'local' or 'random'.
+        
+        1. Build a ring lattice (all edges = 'local')
+        2. For each edge, with probability p, rewire one endpoint to a
+           random node → tag that new edge as 'random'
+        
+        This lets the simulation distinguish trusted neighbours from
+        long-range stranger connections.
+        """
+        import random as rand
+        G = nx.Graph()
+        G.add_nodes_from(range(self.n))
+        
+        # Step 1: Build ring lattice — each node connects to k/2 neighbors on each side
+        half_k = self.k // 2
+        for i in range(self.n):
+            for j in range(1, half_k + 1):
+                neighbor = (i + j) % self.n
+                G.add_edge(i, neighbor, edge_type='local', edge_trust=1.0)
+        
+        # Step 2: Rewire with probability p
+        edges_to_rewire = []
+        for u, v in list(G.edges()):
+            if rand.random() < self.p:
+                edges_to_rewire.append((u, v))
+        
+        for u, v in edges_to_rewire:
+            # Pick a random new target for u (not self, not existing neighbour)
+            candidates = [w for w in range(self.n) 
+                         if w != u and not G.has_edge(u, w)]
+            if not candidates:
+                continue
+            new_target = rand.choice(candidates)
+            G.remove_edge(u, v)
+            G.add_edge(u, new_target, edge_type='random', edge_trust=0.1)
+        
         return G
 
     def get_neighbors(self, node_id):
@@ -72,10 +128,15 @@ class SocialNetwork:
         if self.graph.has_edge(u, v):
             self.graph.remove_edge(u, v)
 
-    def add_edge(self, u, v):
+    def add_edge(self, u, v, edge_type='local', edge_trust=1.0):
         """Form a new relationship. No-op if already connected or self-loop."""
         if u != v and not self.graph.has_edge(u, v):
-            self.graph.add_edge(u, v)
+            self.graph.add_edge(u, v, edge_type=edge_type, edge_trust=edge_trust)
+
+    def update_edge_trust(self, u, v, trust_val):
+        if self.graph.has_edge(u, v):
+            # Ensure it bounds between 0 and 1
+            self.graph.edges[u, v]['edge_trust'] = max(0.0, min(1.0, trust_val))
 
     def get_cooperation_rate(self):
         if self.n == 0:

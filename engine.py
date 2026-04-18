@@ -164,7 +164,8 @@ class SimulationEngine:
             next_q   = self.target_net(self.batch_A_hat, next_states).max(2)[0]
             q_target = rewards + self.gamma * next_q
 
-        loss = nn.MSELoss()(q_taken, q_target)
+        # Huber Loss (SmoothL1Loss) handles massive spikes much better than MSELoss
+        loss = nn.SmoothL1Loss()(q_taken, q_target)
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
@@ -229,6 +230,11 @@ class SimulationEngine:
             best = max(good, key=lambda nb2: self.agents[nb2].reputation)
             self.env.remove_edge(node, worst)
             self.env.add_edge(node, best)
+            # New connections via rewiring start as 'random' (stranger) —
+            # they have low initial edge_trust (0.1) but it can grow
+            if self.env.graph.has_edge(node, best):
+                self.env.graph.edges[node, best]['edge_type'] = 'random'
+                self.env.graph.edges[node, best]['edge_trust'] = 0.1
             rewired.add(node)
             rewire_count += 1
 
@@ -265,19 +271,41 @@ class SimulationEngine:
             ag.reset_round_payoff()
 
         # 4. Play Prisoner's Dilemma — payoffs normalized by degree
-        # Isolated defectors earn LESS because they have fewer victims to exploit
+        # Payoffs are scaled by dynamic `edge_trust`. Mutual cooperation builds trust.
         raw_rewards = np.zeros(self.n, dtype=np.float32)
+        edge_trust_updates = {}
         for i, node in enumerate(nodes):
             ag        = self.agents[node]
             neighbors = self.env.get_neighbors(node)
             n_neighbors = max(len(neighbors), 1)
             for neighbor in neighbors:
                 opp = self.agents[neighbor].strategy
-                ag.add_payoff(self._payoff(ag.strategy, opp), opponent_action=opp)
-            # Normalize by neighbour count: payoff per connection, not total
-            # This means defectors who lose connections via rewiring earn less
+                base_payoff = self._payoff(ag.strategy, opp)
+                
+                # Fetch dynamic edge trust (starts at 1.0 for local, 0.1 for random)
+                edge_data = self.env.graph.edges.get((node, neighbor), {})
+                edge_trust = edge_data.get('edge_trust', 1.0)
+                
+                # Scale payoff by trust: you earn little from strangers until trust settles
+                ag.add_payoff(base_payoff * edge_trust, opponent_action=opp)
+                
+                # Calculate trust evolution (only calculate once per undirected edge)
+                edge_id = tuple(sorted((node, neighbor)))
+                if edge_id not in edge_trust_updates:
+                    if ag.strategy == 1 and opp == 1:
+                        # Mutual cooperation builds trust (max. 1.0)
+                        edge_trust_updates[edge_id] = min(1.0, edge_trust + 0.1)
+                    elif ag.strategy == 0 or opp == 0:
+                        # Defection shatters trust
+                        edge_trust_updates[edge_id] = max(0.0, edge_trust - 0.5)
+
+            # Normalize by neighbour count
             raw_rewards[i] = ag.round_payoff / n_neighbors
             self.env.update_node_score(node, ag.round_payoff)
+            
+        # Apply the edge trust changes back to the graph synchronously
+        for (u, v), new_trust in edge_trust_updates.items():
+            self.env.update_edge_trust(u, v, new_trust)
 
         # 5. Update each agent's behavioral history (emergent "personality")
         for i, node in enumerate(nodes):
@@ -343,3 +371,13 @@ class SimulationEngine:
         for node in random.sample(cooperators, count):
             self.agents[node].strategy = 0
             self.env.update_node_state(node, 0)
+
+    def get_random_edge_fraction(self):
+        """Returns the fraction of edges that are 'random' (stranger connections)."""
+        G = self.env.graph
+        total = G.number_of_edges()
+        if total == 0:
+            return 0.0
+        random_count = sum(1 for u, v in G.edges()
+                          if G.edges[u, v].get('edge_type', 'local') == 'random')
+        return random_count / total

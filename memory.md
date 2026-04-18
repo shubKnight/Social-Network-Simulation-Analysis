@@ -107,3 +107,40 @@ This document serves as the historical technical log and "brain memory" for the 
 - Dashboard: added Warmup slider; updated all defaults to confirmed working params
 - Current best params: `T=1.1, S=-0.2, temp=2.0, decay=0.995, warmup=100, rewiring=0.4, gamma=0.99`
 - Results: 33.6% final coop, peak 62%, 3,593 rewiring events / 800 steps — realistic volatile dynamics
+
+---
+
+### [Session 10] Stabilizing Training Graph (Addressing Loss Spikes)
+- Diagnosed massive spikes in the DQN training loss graph (reaching 100-160+).
+- Cause: The non-stationary nature of MARL means target Q-values constantly shift as agent policies change. Combined with a high discount factor (`gamma=0.99`), prediction targets scale to very large numbers (~100). Standard `MSELoss` heavily penalizes and squares these large shifting prediction errors, resulting in massive outlier spikes during replay buffer batch sampling.
+- Fix: Swapped `nn.MSELoss()` for `nn.SmoothL1Loss()` (Huber Loss). This treats massive prediction errors linearly rather than quadratically, clipping out the chaotic vertical spikes resulting from sudden betrayals and topology rewiring while still optimizing accurately for smaller local TD-errors.
+
+---
+
+### [Session 11] Trust Discount for Random Edges (Social Media Effect)
+- **Insight**: "As randomness in connections increases, cooperation decreases" — mirroring social media where strangers are less trustable than physical neighbours
+- **Implementation**:
+  - Rewrote Watts-Strogatz generation to tag each edge as `local` (original lattice) or `random` (rewired long-range)
+  - All graph types now tag edges: BA=local, ER=all random, Grid=local
+  - Payoffs from `random` edges are multiplied by `STRANGER_DISCOUNT = 0.3` (strangers yield only 30% of the payoff of trusted neighbours)
+  - Dynamically rewired edges are tagged `random` (new connections start as stranger ties)
+  - Added `get_random_edge_fraction()` analytics method
+- **Sweep results** (500 steps, T=1.1, discount=0.3):
+  - p=0.0 (pure local): 37.9% coop, 19 chronic defectors
+  - p=0.1: 39.7% coop, 13 chronic defectors
+  - p=0.5: 29.0% coop, 57 chronic defectors ← trust collapse zone
+  - p=1.0 (fully random): 32.3% coop, 37 chronic defectors
+- **Finding**: The steepest cooperation drop occurs around p≈0.5 where the network loses enough local structure for trust to collapse
+
+---
+
+### [Session 12] Dynamic Edge Trust (Settling Trust)
+- **Insight**: "Agents don't have to behave fully cooperatively with strangers *until the trust settles*." A static penalty isn't realistic — repeated interactions should build trust over time.
+- **Implementation**:
+  - Removed static `STRANGER_DISCOUNT`.
+  - Introduced dynamic **`edge_trust`** attached to every graph edge.
+  - Local edges initialise at `1.0` (fully trusted). Random edges (or dynamically rewired edges) start at `0.1` (heavy distrust).
+  - During PD execution, payoffs on that specific edge are multiplied by its `edge_trust`.
+  - **Trust buildup**: If both agents cooperate, `edge_trust` increases by `+0.1` (capped at 1.0).
+  - **Trust shattering**: If either agent defects, `edge_trust` drops by `-0.5` (floored at 0.0).
+- **Result**: Models real-world "hesitancy." A new connection yields almost no reward initially. But if agents continuously cooperate despite low payouts, the edge trust "settles" up to 1.0, restoring full payoff potential. Betrayal instantly shatters established trust.
