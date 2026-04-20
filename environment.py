@@ -161,16 +161,17 @@ class SocialNetwork:
         metrics['avg_degree'] = sum(dict(G.degree()).values()) / max(G.number_of_nodes(), 1)
         metrics['clustering_coefficient'] = nx.average_clustering(G)
         
-        # Average shortest path (only for connected graphs)
-        if nx.is_connected(G):
-            metrics['avg_path_length'] = nx.average_shortest_path_length(G)
+        target_G = G if nx.is_connected(G) else G.subgraph(max(nx.connected_components(G), key=len))
+        
+        if len(target_G) <= 50:
+            metrics['avg_path_length'] = nx.average_shortest_path_length(target_G) if len(target_G) > 1 else 0
         else:
-            # Use the largest connected component
-            largest_cc = max(nx.connected_components(G), key=len)
-            subgraph = G.subgraph(largest_cc)
-            if len(subgraph) > 1:
-                metrics['avg_path_length'] = nx.average_shortest_path_length(subgraph)
-            else:
-                metrics['avg_path_length'] = 0
+            # Fast approximation for live rendering speed: sample 10 nodes for BFS paths
+            import random
+            sample_nodes = random.sample(list(target_G.nodes()), min(10, len(target_G.nodes())))
+            lengths = []
+            for n in sample_nodes:
+                lengths.extend(nx.single_source_shortest_path_length(target_G, n).values())
+            metrics['avg_path_length'] = sum(lengths) / len(lengths) if lengths else 0
                 
         return metrics

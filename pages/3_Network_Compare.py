@@ -3,20 +3,29 @@ import numpy as np
 import plotly.graph_objects as go
 from engine import SimulationEngine
 from analytics import compute_all_metrics
+from visualization import _base_layout
+from theme import (apply_premium_theme, get_colors, get_chart_colors,
+                   render_mode_toggle, styled_header, divider, stat_card)
 
-st.set_page_config(layout="wide", page_title="Network Compare | Topology of Trust", page_icon="🌐")
-st.title("🌐 Network Comparison")
-st.markdown("Run the **same game** on four topologies. Which structures protect trust?")
+st.set_page_config(layout="wide", page_title="Network Compare | Topology of Trust", page_icon="T")
+apply_premium_theme()
+render_mode_toggle()
+
+C = get_colors()
+CC = get_chart_colors()
+styled_header("Network Comparison",
+              "Run the same game on four topologies — which structures protect trust?")
 
 TOPOLOGIES = {
-    "watts_strogatz": ("🔗 Small-World", "High clustering + short paths"),
-    "barabasi_albert": ("⭐ Scale-Free", "Hub-dominated (social-media-like)"),
-    "erdos_renyi": ("🎲 Random", "No structure, no clusters"),
-    "grid": ("📐 Grid", "Strict local connections"),
+    "watts_strogatz": ("Small-World", "High clustering + short paths", CC[0]),
+    "barabasi_albert": ("Scale-Free", "Hub-dominated topology", CC[1]),
+    "erdos_renyi": ("Random", "No structure, no clusters", CC[2]),
+    "grid": ("Grid Lattice", "Strict local connections", CC[3]),
 }
 
+# ── Sidebar ───────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("Parameters")
+    st.markdown(f"<p style='color:{C['accent_glow']};font-weight:600;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.06em'>Parameters</p>", unsafe_allow_html=True)
     n = st.slider("Nodes (N)", 20, 200, 100, 10)
     k = st.slider("Neighbors (K)", 2, 20, 6, 2)
     steps = st.slider("Steps", 100, 1000, 500, 50)
@@ -25,13 +34,29 @@ with st.sidebar:
     p_ws = st.slider("WS Randomness (p)", 0.0, 1.0, 0.0, 0.01, help="Watts-Strogatz only")
     runs = st.slider("Runs per topology", 1, 10, 3)
 
-if st.button("🚀 Run Comparison", type="primary"):
+# ── Topology cards ────────────────────────────────────────────────
+cols = st.columns(4)
+for i, (gtype, (label, desc, color)) in enumerate(TOPOLOGIES.items()):
+    with cols[i]:
+        st.markdown(f"""
+        <div style="background:{C['surface']};border:1px solid {C['border']};
+                    border-top:3px solid {color};border-radius:10px;
+                    padding:16px 14px;text-align:center;min-height:100px;
+                    box-shadow:{C['card_shadow']}">
+            <div style="color:{C['text']};font-weight:700;font-size:0.9rem;margin-bottom:4px">{label}</div>
+            <div style="color:{C['text_dim']};font-size:0.76rem;line-height:1.4">{desc}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+st.write("")
+
+if st.button("Run Comparison", type="primary", use_container_width=True):
     all_results = {}
     total = len(TOPOLOGIES) * steps * runs
     bar = st.progress(0, text="Starting...")
     done = 0
-    
-    for gtype, (label, _) in TOPOLOGIES.items():
+
+    for gtype, (label, _, color) in TOPOLOGIES.items():
         all_histories = []
         for run_i in range(runs):
             engine = SimulationEngine(n=n, k=k, p=p_ws, T=T, R=1.0, P=0.0, S=0.0,
@@ -43,52 +68,62 @@ if st.button("🚀 Run Comparison", type="primary"):
                 history.append(rate)
                 done += 1
                 if s % max(1, steps // 10) == 0:
-                    bar.progress(min(done / total, 1.0), text=f"{label} run {run_i+1}/{runs}")
+                    bar.progress(min(done / total, 1.0), text=f"{label} | run {run_i+1}/{runs}")
             all_histories.append(history)
-        
-        # Average histories across runs
+
         avg_history = np.mean(all_histories, axis=0).tolist()
         final_metrics = compute_all_metrics(engine.env)
         all_results[gtype] = {
-            'label': label,
+            'label': label, 'color': color,
             'history': avg_history,
             'metrics': final_metrics,
             'final_rates': [h[-1] for h in all_histories],
         }
-    
+
     bar.empty()
     st.session_state.compare_results = all_results
     st.rerun()
 
+# ── Results ───────────────────────────────────────────────────────
 if 'compare_results' in st.session_state:
     results = st.session_state.compare_results
-    
-    st.subheader("📈 Cooperation Rate Over Time")
+
+    divider()
+
     fig = go.Figure()
-    colors = ['#3b82f6', '#f59e0b', '#10b981', '#8b5cf6']
-    for i, (gtype, data) in enumerate(results.items()):
+    for gtype, data in results.items():
         fig.add_trace(go.Scatter(
             y=data['history'], mode='lines', name=data['label'],
-            line=dict(color=colors[i], width=2.5),
+            line=dict(color=data['color'], width=2.5),
         ))
-    fig.update_layout(xaxis_title="Step", yaxis_title="Cooperation Rate",
-                      yaxis=dict(range=[0, 1.05]), height=450,
-                      legend=dict(x=0.01, y=0.99))
+    fig.update_layout(**_base_layout(
+        xaxis_title="Step", yaxis_title="Cooperation Rate",
+        yaxis=dict(range=[0, 1.05], gridcolor=C["grid"]),
+        height=460, legend=dict(x=0.01, y=0.99),
+        title=dict(text="Cooperation Rate Over Time", font=dict(size=13, color=C["text_dim"])),
+    ))
     st.plotly_chart(fig, use_container_width=True)
-    
-    st.subheader("📊 Final State Comparison")
+
+    divider()
+
+    st.markdown(f"<h3 style='margin-bottom:14px;font-size:1.05rem'>Final State Comparison</h3>", unsafe_allow_html=True)
     cols = st.columns(len(results))
     for i, (gtype, data) in enumerate(results.items()):
         m = data['metrics']
+        avg_final = np.mean(data['final_rates'])
         with cols[i]:
-            st.markdown(f"**{data['label']}**")
-            avg_final = np.mean(data['final_rates'])
-            st.metric("Coop Rate", f"{avg_final:.0%}")
-            st.metric("Gini", f"{m['gini_coefficient']:.3f}")
-            st.metric("Clustering", f"{m['clustering_coefficient']:.3f}")
-            st.metric("Avg Path", f"{m['avg_path_length']:.2f}")
-            st.metric("Coop Clusters", m['num_cooperator_clusters'])
-    
-    with st.expander("📖 About These Topologies"):
-        for _, (label, desc) in TOPOLOGIES.items():
-            st.markdown(f"**{label}**: {desc}")
+            st.markdown(f"""
+            <div style="background:{C['surface']};border:1px solid {C['border']};
+                        border-top:3px solid {data['color']};border-radius:10px;
+                        padding:18px 14px;text-align:center;box-shadow:{C['card_shadow']}">
+                <div style="color:{C['text']};font-weight:700;font-size:0.9rem;margin-bottom:10px">{data['label']}</div>
+                <div style="color:{data['color']};font-size:1.8rem;font-weight:800;font-family:'JetBrains Mono'">{avg_final:.0%}</div>
+                <div style="color:{C['text_dim']};font-size:0.7rem;margin-bottom:10px">Final Cooperation</div>
+                <div style="color:{C['text_dim']};font-size:0.76rem;line-height:1.8">
+                    Gini: <b style="color:{C['text']}">{m['gini_coefficient']:.3f}</b><br>
+                    Clustering: <b style="color:{C['text']}">{m['clustering_coefficient']:.3f}</b><br>
+                    Avg Path: <b style="color:{C['text']}">{m['avg_path_length']:.2f}</b><br>
+                    Coop Clusters: <b style="color:{C['text']}">{m['num_cooperator_clusters']}</b>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)

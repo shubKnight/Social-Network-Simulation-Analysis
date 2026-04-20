@@ -1,13 +1,20 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
 from engine import SimulationEngine
-from visualization import create_network_figure, create_cooperation_chart, create_wealth_histogram
+from visualization import (create_network_figure, create_cooperation_chart,
+                           create_training_chart)
 from analytics import compute_all_metrics
+from theme import (apply_premium_theme, get_colors, render_mode_toggle,
+                   styled_header, divider, stat_card, section_label)
 
-st.set_page_config(layout="wide", page_title="Simulation | Topology of Trust", page_icon="🧪")
-st.title("🧪 Live Simulation")
+st.set_page_config(layout="wide", page_title="Simulation | Topology of Trust", page_icon="T")
+apply_premium_theme()
 
-# ── Session-state backed sliders ──
+C = get_colors()
+styled_header("Live Simulation", "Real-time multi-agent cooperation dynamics on evolving networks")
+
+# ── Session-state backed sliders ──────────────────────────────────
 def ss(label, mn, mx, default, step, key, **kw):
     if key not in st.session_state:
         st.session_state[key] = default
@@ -18,51 +25,47 @@ def ss_exp(label, mn, mx, default, step, key, **kw):
         st.session_state[key] = default
     return st.slider(label, mn, mx, st.session_state[key], step, key=key, **kw)
 
-# ── Sidebar ──
-st.sidebar.header("🌐 Network")
+# ── Sidebar ───────────────────────────────────────────────────────
+render_mode_toggle()
+
+section_label("Network Topology")
 n = ss("Nodes (N)", 10, 300, 100, 10, "n")
 k = ss("Neighbors (K)", 2, 20, 6, 2, "k")
-p = ss("Randomness (p) [Social Media Effect]", 0.0, 1.0, 0.0, 0.01, "p",
-         help="High randomness mimics social media. NOTE: Press Reset Simulation below to apply changes!")
-graph_type = st.sidebar.selectbox("Graph Type", 
+p = ss("Randomness (p)", 0.0, 1.0, 0.0, 0.01, "p",
+       help="Controls edge randomness. High values mimic social media. Press Reset to apply.")
+graph_type = st.sidebar.selectbox("Graph Type",
     ["watts_strogatz", "barabasi_albert", "erdos_renyi", "grid"],
-    format_func=lambda x: {"watts_strogatz": "🔗 Small-World (Watts-Strogatz)", 
-                            "barabasi_albert": "⭐ Scale-Free (Barabási-Albert)",
-                            "erdos_renyi": "🎲 Random (Erdős-Rényi)",
-                            "grid": "📐 Regular Grid"}[x],
+    format_func=lambda x: {"watts_strogatz": "Small-World (WS)",
+                            "barabasi_albert": "Scale-Free (BA)",
+                            "erdos_renyi": "Random (ER)",
+                            "grid": "Grid Lattice"}[x],
     key="graph_type")
 
-st.sidebar.header("🧠 Deep RL (PyTorch)")
+section_label("Deep RL Parameters")
 learning_rate_log = ss("Learning Rate (10^x)", -5.0, -1.0, -3.0, 0.1, "lr")
 learning_rate = 10 ** learning_rate_log
 batch_size = ss("Batch Size", 16, 256, 64, 16, "batch_size")
-gamma = ss("Discount Factor (γ)", 0.8, 0.999, 0.99, 0.001, "gamma")
+gamma = ss("Discount Factor", 0.8, 0.999, 0.99, 0.001, "gamma")
 temperature = ss("Initial Temperature", 0.1, 5.0, 2.0, 0.1, "temp",
-                   help="High = Wide exploration (recommended: 2.0).")
-temp_decay = ss("Temperature Decay", 0.9, 0.999, 0.995, 0.001, "temp_decay",
-                   help="Slow decay gives the GCN time to train before committing.")
-temp_warmup = ss("Warmup Steps (no decay)", 0, 200, 100, 10, "temp_warmup",
-                    help="Temperature held constant for N steps so GCN fills replay buffer first.")
-init_coop = ss("Initial Cooperator %", 0.0, 1.0, 0.5, 0.05, "init_coop",
-                   help="50% = unbiased start.")
+                   help="Exploration breadth. Recommended: 2.0")
+temp_decay = ss("Temperature Decay", 0.9, 0.999, 0.995, 0.001, "temp_decay")
+temp_warmup = ss("Warmup Steps", 0, 200, 100, 10, "temp_warmup")
+init_coop = ss("Initial Cooperator %", 0.0, 1.0, 0.5, 0.05, "init_coop")
 
-st.sidebar.header("🔀 Network Rewiring")
+section_label("Network Rewiring")
 rewiring_rate = ss("Rewiring Rate", 0.0, 1.0, 0.4, 0.05, "rewiring_rate",
-                   help="Fraction of exploited cooperators that cut chronic defectors & seek trustworthy replacements.")
+                   help="Fraction of exploited cooperators that cut defectors.")
 
-st.sidebar.header("🎲 Payoff Matrix")
-with st.sidebar.expander("T > R > P ≥ S", expanded=False):
+section_label("Payoff Matrix")
+with st.sidebar.expander("T > R > P >= S", expanded=False):
     T = ss_exp("Temptation (T)", 0.5, 3.0, 1.1, 0.05, "T")
     R = ss_exp("Reward (R)",    0.5, 3.0, 1.0, 0.05, "R")
     P = ss_exp("Punishment (P)", 0.0, 2.0, 0.0, 0.05, "P")
     S = ss_exp("Sucker (S)",   -1.0, 1.0, -0.2, 0.05, "S")
 
-# ── Reset ──
-if st.sidebar.button("🔄 Reset Simulation", type="primary"):
-    st.session_state.sim_engine = None
-    st.session_state.sim_history = []
-    st.session_state.sim_step = 0
-    st.rerun()
+# ── State Tracking ────────────────────────────────────────────────
+if 'is_playing' not in st.session_state:
+    st.session_state.is_playing = False
 
 def get_engine():
     if 'sim_engine' not in st.session_state or st.session_state.sim_engine is None:
@@ -84,93 +87,260 @@ def get_engine():
 
 engine = get_engine()
 
-# ── Controls ──
-c1, c2, _ = st.columns([1, 1, 2])
-with c1:
-    num_steps = st.number_input("Steps", min_value=1, max_value=5000, value=500)
-with c2:
-    st.write("")
-    run = st.button("▶️ Run", type="primary", use_container_width=True)
+# ── Helper ────────────────────────────────────────────────────────
+def _record_step(rate):
+    st.session_state.sim_step += 1
+    st.session_state.sim_history.append({
+        "Step": st.session_state.sim_step,
+        "Cooperation Rate": rate,
+        "DQN Loss": engine.last_loss,
+        "Temperature": engine.temp,
+        "Rewiring Events": engine.last_rewire_count,
+        "Stranger %": engine.get_random_edge_fraction(),
+    })
 
-if run:
-    bar = st.progress(0, text="Simulating...")
-    for i in range(num_steps):
-        rate = engine.step()
-        st.session_state.sim_step += 1
-        st.session_state.sim_history.append({
-            "Step": st.session_state.sim_step,
-            "Cooperation Rate": rate,
-            "DQN Loss": engine.last_loss,
-            "Temperature": engine.temp,
-            "Rewiring Events": engine.last_rewire_count,
-            "Stranger %": engine.get_random_edge_fraction(),
-        })
-        if i % max(1, num_steps // 50) == 0:
-            bar.progress((i + 1) / num_steps, text=f"Step {i+1}/{num_steps}")
-    bar.empty()
+# ── Control Bar ───────────────────────────────────────────────────
+st.markdown(f"""
+<div style="
+    background:{C['surface']};
+    border:1px solid {C['border']};
+    border-radius:10px;
+    padding:14px 18px 6px;
+    margin-bottom:16px;
+    box-shadow:{C['card_shadow']};
+">
+    <div style="color:{C['text']};font-weight:600;font-size:0.9rem;margin-bottom:8px">Controls</div>
+</div>
+""", unsafe_allow_html=True)
+
+c1, c2, c3, c4, c5 = st.columns([1.1, 1.1, 1, 1, 1])
+
+if c1.button("Run Live", type="primary", use_container_width=True):
+    st.session_state.is_playing = True
     st.rerun()
 
-# ── Metrics ──
+if c2.button("Pause", use_container_width=True):
+    st.session_state.is_playing = False
+    st.rerun()
+
+if c3.button("+10 Steps", use_container_width=True):
+    st.session_state.is_playing = False
+    for _ in range(10):
+        _record_step(engine.step())
+    st.rerun()
+
+if c4.button("+50 Steps", use_container_width=True):
+    st.session_state.is_playing = False
+    for _ in range(50):
+        _record_step(engine.step())
+    st.rerun()
+
+if c5.button("Reset", use_container_width=True):
+    st.session_state.sim_engine = None
+    st.session_state.sim_history = []
+    st.session_state.sim_step = 0
+    st.session_state.is_playing = False
+    st.rerun()
+
+# Fast forward & speed settings
+f1, f2, f3 = st.columns([1, 1.5, 3])
+with f1:
+    fast_steps = st.number_input("Steps", min_value=1, max_value=5000, value=500,
+                                  label_visibility="collapsed")
+with f2:
+    live_speed = st.selectbox("Live Speed", ["Smooth (1 step/frame)", "Balanced (5 steps/frame)", "Fast (20 steps/frame)"], 
+                              index=1, label_visibility="collapsed")
+    SPEED_MAP = {"Smooth (1 step/frame)": 1, "Balanced (5 steps/frame)": 5, "Fast (20 steps/frame)": 20}
+    st.session_state.live_batch_size = SPEED_MAP[live_speed]
+
+with f3:
+    if st.button("Fast Forward", use_container_width=True):
+        st.session_state.is_playing = False
+        bar = st.progress(0, text="Running...")
+        for i in range(fast_steps):
+            _record_step(engine.step())
+            if i % max(1, fast_steps // 50) == 0:
+                bar.progress((i + 1) / fast_steps, text=f"Step {i+1}/{fast_steps}")
+        bar.empty()
+        st.rerun()
+
+if st.session_state.is_playing:
+    from visualization import hex_to_rgba
+    _ind_bg = hex_to_rgba(C['accent'], 0.05)
+    _ind_border = hex_to_rgba(C['accent'], 0.2)
+    st.markdown(f"""
+    <div style="
+        background:{_ind_bg};
+        border:1px solid {_ind_border};
+        border-radius:8px;
+        padding:8px 14px;
+        text-align:center;
+        color:{C['accent_glow']};
+        font-weight:600;
+        font-size:0.85rem;
+    ">Simulation running live — press Pause to stop</div>
+    """, unsafe_allow_html=True)
+
+# ── Metrics Dashboard ─────────────────────────────────────────────
+divider()
+
 metrics = compute_all_metrics(engine.env)
-m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Step", st.session_state.get('sim_step', 0))
-m2.metric("Coop Rate", f"{metrics['cooperation_rate']:.0%}")
-m3.metric("Gini Index", f"{metrics['gini_coefficient']:.3f}")
-m4.metric("Clustering", f"{metrics['clustering_coefficient']:.3f}")
-m5.metric("Avg Path", f"{metrics['avg_path_length']:.2f}")
-m6.metric("Stranger Edges", f"{engine.get_random_edge_fraction():.1%}")
+step_n = st.session_state.get('sim_step', 0)
+stranger_frac = engine.get_random_edge_fraction()
 
-# ── Network Graph ──
-st.plotly_chart(create_network_figure(engine.env), use_container_width=True)
+m_cols = st.columns(6)
+metric_data = [
+    ("Step", step_n, C["text"]),
+    ("Cooperation", f"{metrics['cooperation_rate']:.0%}", C["cooperator"]),
+    ("Gini Index", f"{metrics['gini_coefficient']:.3f}", C["warning"]),
+    ("Clustering", f"{metrics['clustering_coefficient']:.3f}", C["accent_glow"]),
+    ("Avg Path", f"{metrics['avg_path_length']:.2f}", C["success"]),
+    ("Stranger Edges", f"{stranger_frac:.1%}", C["defector"]),
+]
+for i, (label, value, color) in enumerate(metric_data):
+    m_cols[i].markdown(stat_card(label, value, color), unsafe_allow_html=True)
 
-# ── Charts ──
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("📈 Cooperation Over Time")
+# ── Main Content ──────────────────────────────────────────────────
+divider()
+
+# View toggle
+if 'show_all' not in st.session_state:
+    st.session_state.show_all = False
+
+toggle_col1, toggle_col2 = st.columns([4, 1])
+with toggle_col2:
+    if st.session_state.show_all:
+        if st.button("Tabbed View", use_container_width=True, key="_view_toggle"):
+            st.session_state.show_all = False
+            st.rerun()
+    else:
+        if st.button("Show All", use_container_width=True, key="_view_toggle"):
+            st.session_state.show_all = True
+            st.rerun()
+
+with toggle_col1:
+    mode_label = "Full Dashboard" if st.session_state.show_all else "Tabbed"
+    st.markdown(f"""
+    <div style="color:{C['text_dim']};font-size:0.78rem;padding:8px 0;font-weight:500">
+        View: <span style="color:{C['accent_glow']};font-weight:600">{mode_label}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ── Helper: render sections ───────────────────────────────────────
+
+def _render_network(key_suffix=""):
+    st.markdown(f"<h3 style='font-size:1.05rem;margin-bottom:12px'>Network Graph</h3>", unsafe_allow_html=True)
+    st.plotly_chart(create_network_figure(engine.env), use_container_width=True, key=f"net{key_suffix}")
+
+    divider()
+
     if st.session_state.get('sim_history'):
-        st.plotly_chart(create_cooperation_chart(st.session_state.sim_history), use_container_width=True)
-with col2:
-    st.subheader("🧠 MADRL Training Stats")
+        st.plotly_chart(create_cooperation_chart(st.session_state.sim_history),
+                      use_container_width=True, key=f"coop{key_suffix}")
+    else:
+        st.markdown(f"""
+        <div style="text-align:center;padding:60px 20px;color:{C['text_dim']};
+                    border:1px dashed {C['border']};border-radius:10px">
+            <div style="font-weight:600;margin-bottom:4px">No data yet</div>
+            <div style="font-size:0.82rem">Press Run Live or Fast Forward to begin</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def _render_training(key_suffix=""):
+    st.markdown(f"<h3 style='font-size:1.05rem;margin-bottom:12px'>Training Analytics</h3>", unsafe_allow_html=True)
     if st.session_state.get('sim_history'):
-        import pandas as pd
         df = pd.DataFrame(st.session_state.sim_history)
-        if "DQN Loss" in df.columns:
-            st.caption("DQN Training Loss")
-            st.line_chart(df.set_index("Step")["DQN Loss"])
-            st.caption("Temperature (Boltzmann Exploration)")
-            st.line_chart(df.set_index("Step")["Temperature"])
-            st.caption("Rewiring Events per Step")
-            st.line_chart(df.set_index("Step")["Rewiring Events"])
+        if "DQN Loss" in df.columns and len(df) > 1:
+            st.plotly_chart(create_training_chart(df), use_container_width=True, key=f"train{key_suffix}")
             if "Stranger %" in df.columns:
-                st.caption("Stranger Edge Ratio (Social Media Effect)")
+                st.markdown(f"<p style='color:{C['text_dim']};font-size:0.82rem;margin:12px 0 4px'>Stranger Edge Ratio</p>", unsafe_allow_html=True)
                 st.line_chart(df.set_index("Step")["Stranger %"])
     else:
-        st.info("No data yet.")
-with st.expander("🔍 Cluster Analysis"):
-    cc1, cc2 = st.columns(2)
-    cc1.metric("Cooperator Clusters", metrics['num_cooperator_clusters'])
-    cc1.metric("Largest Coop Cluster", metrics['largest_cooperator_cluster'])
-    cc2.metric("Defector Clusters", metrics['num_defector_clusters'])
-    cc2.metric("Largest Defect Cluster", metrics['largest_defector_cluster'])
-    cc1.metric("Strategy Entropy", f"{metrics['strategy_entropy']:.3f}")
-    cc2.metric("Avg Score", f"{metrics['avg_score']:.1f}")
+        st.markdown(f"""
+        <div style="text-align:center;padding:60px 20px;color:{C['text_dim']};
+                    border:1px dashed {C['border']};border-radius:10px">
+            <div style="font-weight:600">Training data appears here</div>
+            <div style="font-size:0.82rem;margin-top:4px">DQN Loss / Temperature / Rewiring</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with st.expander("🧠 Emergent Behavior Profile", expanded=True):
+
+def _render_profiles(key_suffix=""):
+    st.markdown(f"<h3 style='margin-bottom:14px;font-size:1.05rem'>Cluster Analysis</h3>", unsafe_allow_html=True)
+    cc = st.columns(6)
+    cluster_data = [
+        ("Coop Clusters", metrics['num_cooperator_clusters'], C["cooperator"]),
+        ("Largest Coop", metrics['largest_cooperator_cluster'], C["cooperator"]),
+        ("Defect Clusters", metrics['num_defector_clusters'], C["defector"]),
+        ("Largest Defect", metrics['largest_defector_cluster'], C["defector"]),
+        ("Strategy Entropy", f"{metrics['strategy_entropy']:.3f}", C["accent_glow"]),
+        ("Avg Score", f"{metrics['avg_score']:.1f}", C["warning"]),
+    ]
+    for i, (label, val, color) in enumerate(cluster_data):
+        cc[i].markdown(stat_card(label, val, color), unsafe_allow_html=True)
+
+    divider()
+
+    st.markdown(f"<h3 style='margin-bottom:14px;font-size:1.05rem'>Emergent Behavior</h3>", unsafe_allow_html=True)
     profile = engine.get_behavioral_profile()
-    e1, e2, e3, e4 = st.columns(4)
-    e1.metric("🤝 Chronic Cooperators", profile['chronic_cooperators'],
-              help="Agents with strategy_trend > 70% (self-selected altruists)")
-    e2.metric("👿 Chronic Defectors", profile['chronic_defectors'],
-              help="Agents with strategy_trend < 30% (self-selected defectors)")
-    e3.metric("⚖️ Swing Agents",  profile['swing_agents'],
-              help="Everyone in between — opportunists, learning, transitioning")
-    e4.metric("🗡️ High Betrayal", profile['high_betrayal'],
-              help="Agents who cooperated often but >40% of those moves were exploited")
-    st.caption(
-        f"Avg Strategy Trend: {profile['avg_strategy_trend']:.2f} · "
-        f"Avg Betrayal Rate: {profile['avg_betrayal_rate']:.2f} · "
-        f"Avg Payoff Trend: {profile['avg_payoff_trend']:.2f}"
-    )
-    st.info("💡 These archetypes emerged from learning with no pre-assignment. "
-            "Chronic Cooperators formed naturally in dense trust clusters; "
-            "Chronic Defectors may be isolated nodes or hub exploiters.")
+    ep = st.columns(4)
+    profile_data = [
+        ("Chronic Cooperators", profile['chronic_cooperators'], C["cooperator"]),
+        ("Chronic Defectors", profile['chronic_defectors'], C["defector"]),
+        ("Swing Agents", profile['swing_agents'], C["warning"]),
+        ("High Betrayal", profile['high_betrayal'], C["danger"]),
+    ]
+    for i, (label, val, color) in enumerate(profile_data):
+        ep[i].markdown(stat_card(label, val, color), unsafe_allow_html=True)
+
+    from visualization import hex_to_rgba
+    accent_bg = hex_to_rgba(C['accent'], 0.04)
+    accent_border = hex_to_rgba(C['accent'], 0.12)
+
+    st.markdown(f"""
+    <div style="margin-top:14px;padding:12px 16px;background:{C['surface']};
+                border:1px solid {C['border']};border-radius:8px;font-size:0.82rem">
+        <span style="color:{C['text_dim']}">
+            Avg Strategy: <b style="color:{C['text']}">{profile['avg_strategy_trend']:.2f}</b> |
+            Avg Betrayal: <b style="color:{C['text']}">{profile['avg_betrayal_rate']:.2f}</b> |
+            Avg Payoff: <b style="color:{C['text']}">{profile['avg_payoff_trend']:.2f}</b>
+        </span>
+    </div>
+    <div style="margin-top:8px;padding:10px 14px;background:{accent_bg};
+                border:1px solid {accent_border};border-radius:8px;
+                color:{C['text_dim']};font-size:0.8rem;line-height:1.5">
+        These archetypes emerged from learning with no pre-assignment.
+        Cooperators formed in dense trust clusters; defectors appeared as isolated nodes or hub exploiters.
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ── Render based on mode ──────────────────────────────────────────
+
+if st.session_state.show_all:
+    # Full scrollable dashboard — everything visible at once
+    _render_network("_all")
+    divider()
+    _render_training("_all")
+    divider()
+    _render_profiles("_all")
+else:
+    # Tabbed view
+    tab_net, tab_train, tab_profile = st.tabs(["Network Graph", "Training Analytics", "Agent Profiles"])
+    with tab_net:
+        _render_network("_tab")
+    with tab_train:
+        _render_training("_tab")
+    with tab_profile:
+        _render_profiles("_tab")
+
+# ── Execution Tail ────────────────────────────────────────────────
+if st.session_state.is_playing:
+    import time
+    batch = st.session_state.get('live_batch_size', 5)
+    for _ in range(batch):
+        _record_step(engine.step())
+    time.sleep(0.01)
+    st.rerun()

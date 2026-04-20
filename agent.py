@@ -28,6 +28,10 @@ class NeuralAgent:
         self.node_id = node_id
         self.strategy = strategy
         self.max_payoff = max(max_payoff, 1.0)
+        
+        # Homophily Trait: Hidden faction / belief group (e.g. 0, 1, 2)
+        import random
+        self.trait = random.choice([0, 1, 2])
 
         # Round-level accounting
         self.round_payoff    = 0.0

@@ -187,13 +187,18 @@ class SimulationEngine:
 
         # Expand beyond suckered: any cooperator whose worst neighbor is a
         # chronic defector (betrayal_rate > 0.5) can consider rewiring.
-        # This keeps selection pressure on defectors even after suckering stops.
         all_coops = [n for n in self.agents
                      if self.agents[n].strategy == 1
                      and any(action_map.get(nb) == 0 and
                              self.agents[nb].betrayal_rate > 0.5
                              for nb in self.env.get_neighbors(n))]
-        candidates = list(set(suckered_nodes) | set(all_coops))
+                             
+        # Homophily pruning: Any node connected to someone of a different trait
+        homophily_candidates = [n for n in self.agents
+                                if any(self.agents[nb].trait != self.agents[n].trait 
+                                       for nb in self.env.get_neighbors(n))]
+                                       
+        candidates = list(set(suckered_nodes) | set(all_coops) | set(homophily_candidates))
         candidates = [n for n in candidates if random.random() < self.rewiring_rate]
         random.shuffle(candidates)
 
@@ -204,14 +209,19 @@ class SimulationEngine:
             if len(neighbors) <= self.MIN_DEGREE:
                 continue
 
-            betrayers = [nb for nb in neighbors
-                         if action_map.get(nb) == 0
-                         and self.agents[node].strategy == 1]
-            if not betrayers:
-                continue
-            worst = min(betrayers, key=lambda nb: self.agents[nb].reputation)
+            # Prioritize cutting defectors. If no defectors, cut someone of a different trait.
+            betrayers = [nb for nb in neighbors if action_map.get(nb) == 0]
+            if betrayers:
+                worst = min(betrayers, key=lambda nb: self.agents[nb].reputation)
+            else:
+                aliens = [nb for nb in neighbors if self.agents[nb].trait != self.agents[node].trait]
+                if not aliens:
+                    continue
+                worst = random.choice(aliens)
 
-            # 2-hop search for a trustworthy cooperator
+            node_trait = self.agents[node].trait
+            
+            # 2-hop search for a trustworthy cooperator of the SAME trait
             one_hop = set(neighbors)
             two_hop = set()
             for nb in neighbors:
@@ -222,16 +232,26 @@ class SimulationEngine:
 
             good = [nb2 for nb2 in two_hop
                     if self.agents[nb2].strategy == 1
-                    and self.agents[nb2].reputation > 0.4
+                    and self.agents[nb2].trait == node_trait
                     and len(self.env.get_neighbors(nb2)) <= self.MAX_DEGREE]
+            
             if not good:
-                continue
+                # If no good 2-hop neighbor, look globally for someone with the matching trait!
+                good = [w for w in range(self.n) 
+                        if w != node and not self.env.graph.has_edge(node, w)
+                        and self.agents[w].strategy == 1
+                        and self.agents[w].trait == node_trait
+                        and len(self.env.get_neighbors(w)) <= self.MAX_DEGREE]
+                
+                if not good:
+                    continue
 
+            # Pick the most reputable among the matching traits
             best = max(good, key=lambda nb2: self.agents[nb2].reputation)
+            
             self.env.remove_edge(node, worst)
             self.env.add_edge(node, best)
-            # New connections via rewiring start as 'random' (stranger) —
-            # they have low initial edge_trust (0.1) but it can grow
+            
             if self.env.graph.has_edge(node, best):
                 self.env.graph.edges[node, best]['edge_type'] = 'random'
                 self.env.graph.edges[node, best]['edge_trust'] = 0.1

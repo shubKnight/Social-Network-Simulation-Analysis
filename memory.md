@@ -144,3 +144,13 @@ This document serves as the historical technical log and "brain memory" for the 
   - **Trust buildup**: If both agents cooperate, `edge_trust` increases by `+0.1` (capped at 1.0).
   - **Trust shattering**: If either agent defects, `edge_trust` drops by `-0.5` (floored at 0.0).
 - **Result**: Models real-world "hesitancy." A new connection yields almost no reward initially. But if agents continuously cooperate despite low payouts, the edge trust "settles" up to 1.0, restoring full payoff potential. Betrayal instantly shatters established trust.
+
+
+Next Significant addition: 
+The "Homophily" Engine update (Birds of a Feather)
+In sociology, networks fracture into clusters (like echo chambers) because of Homophily—the tendency of individuals to associate and bond with similar others.
+
+Hidden Traits: When agents spawn, they are now secretly assigned into one of three random latent "factions" (traits 0, 1, or 2). This represents similarities like shared interests, culture, or beliefs.
+Affinity-Biased Rewiring: I rewrote the logic for how agents choose new connections after being betrayed by defectors. Previously, they just looked 2-hops away for the agent with the highest mathematical "reputation" globally, which forced everyone to bind to the same super-hubs, creating one giant unescapable blob.
+Logical Clustering: Now, replacement nodes are chosen via an Affinity Score. Agents will heavily bias connecting to reputable cooperators who share their exact hidden trait.
+Global Long-Range Matchmaking: If an agent is stranded in a toxic local area, they will now actively bridge across the network to find an isolated cooperator who shares their trait, rather than just settling for a random local.
