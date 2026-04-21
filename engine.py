@@ -1,17 +1,18 @@
 """
-Graph Convolutional Multi-Agent RL (GC-MARL) Engine — v4
+Graph Convolutional Multi-Agent RL (GC-MARL) Engine — v5
 
-What changed from v3:
-  - Removed all hardcoded personality types and reward shaping.
-  - Agents now build behavioral profiles from their own experience:
-      strategy_trend  = rolling mean of last 20 actions
-      payoff_trend    = rolling normalized payoff
-      betrayal_rate   = fraction of cooperative moves that were exploited
-  - State vector: [strategy, payoff, reputation, strategy_trend,
-                   payoff_trend, betrayal_rate]  (dim=6)
-  - The GCN learns differentiated strategies purely through gradient descent.
-  - Dynamic network rewiring retained: suckered agents cut chronic defectors
-    and seek reputable cooperators in 2-hop neighbourhood.
+What changed from v4:
+  - Replaced single-integer trait with full OCEAN 5-dimensional personality model.
+  - Each agent has: openness, agreeableness, conscientiousness, extraversion, neuroticism.
+  - State vector expanded to 11 dimensions:
+      [strategy, payoff, reputation, strategy_trend, payoff_trend, betrayal_rate,
+       openness, agreeableness, conscientiousness, extraversion, neuroticism]
+  - Per-agent Boltzmann temperature (scaled by openness).
+  - Conscientiousness-modulated Q-value sharpness.
+  - Agreeableness gates rewiring probability and trust rebuilding.
+  - Extraversion controls rewiring search radius and max preferred degree.
+  - Neuroticism amplifies recent negative payoff experiences.
+  - Trait-based homophily replaced with personality-distance homophily.
 """
 
 import numpy as np
@@ -22,8 +23,15 @@ import torch.optim as optim
 import networkx as nx
 
 from environment import SocialNetwork
-from agent import NeuralAgent
+from agent import NeuralAgent, OCEAN_DIMS
 from models import GraphDQN, ReplayBuffer
+
+# Personality-distance threshold for homophily rewiring.
+# Agents prefer connecting to others within this distance.
+# With normal(0.5, 0.2) in 5D, average pairwise distance ≈ 0.28.
+# 0.20 means only the top ~30% most-similar agents pass the filter,
+# driving strong cluster formation like the old 3-trait system.
+HOMOPHILY_THRESHOLD = 0.20
 
 
 class SimulationEngine:
@@ -58,11 +66,11 @@ class SimulationEngine:
         self.rewiring_rate     = rewiring_rate
         self.last_rewire_count = 0
         self.MIN_DEGREE  = 2
-        self.MAX_DEGREE  = max(k * 2, 6)
+        self.MAX_DEGREE  = max(k * 2, 6)    # hard cap (matches original engine)
 
         self.device      = torch.device("cpu")
-        self.policy_net  = GraphDQN().to(self.device)   # state_dim=6
-        self.target_net  = GraphDQN().to(self.device)
+        self.policy_net  = GraphDQN(state_dim=11, hidden_dim=128).to(self.device)
+        self.target_net  = GraphDQN(state_dim=11, hidden_dim=128).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
@@ -105,24 +113,37 @@ class SimulationEngine:
 
     def _get_node_observations(self):
         """
-        Feature matrix X : [N, 6]
-          col 0  strategy        current action (0/1)
-          col 1  round_payoff    raw this-round payoff
-          col 2  reputation      lifetime cooperation rate
-          col 3  strategy_trend  rolling mean of last 20 actions
-          col 4  payoff_trend    rolling normalized payoff [-1, 1]
-          col 5  betrayal_rate   fraction of coop moves that were exploited
-        All features emerge from experience — no pre-assignment.
+        Feature matrix X : [N, 11]
+          col 0   strategy        current action (0/1)
+          col 1   round_payoff    raw this-round payoff
+          col 2   reputation      lifetime cooperation rate
+          col 3   strategy_trend  rolling mean of last 20 actions
+          col 4   payoff_trend    rolling normalized payoff [-1, 1]
+          col 5   betrayal_rate   fraction of coop moves that were exploited
+          col 6   openness        OCEAN personality dimension
+          col 7   agreeableness   OCEAN personality dimension
+          col 8   conscientiousness OCEAN personality dimension
+          col 9   extraversion    OCEAN personality dimension
+          col 10  neuroticism     OCEAN personality dimension
+
+        First 6 features emerge from experience; last 5 are intrinsic traits.
         """
-        X = np.zeros((self.n, 6), dtype=np.float32)
+        X = np.zeros((self.n, 11), dtype=np.float32)
         for i, node in enumerate(self.agents.keys()):
             ag       = self.agents[node]
+            # Behavioral features (emergent)
             X[i, 0] = ag.strategy
             X[i, 1] = ag.round_payoff
             X[i, 2] = ag.reputation
             X[i, 3] = ag.strategy_trend
             X[i, 4] = ag.payoff_trend
             X[i, 5] = ag.betrayal_rate
+            # Personality features (intrinsic OCEAN)
+            X[i, 6]  = ag.openness
+            X[i, 7]  = ag.agreeableness
+            X[i, 8]  = ag.conscientiousness
+            X[i, 9]  = ag.extraversion
+            X[i, 10] = ag.neuroticism
         return X
 
     # ── Reward Normalization ─────────────────────────────────────────
@@ -176,30 +197,39 @@ class SimulationEngine:
 
     def _maybe_rewire(self, suckered_nodes, action_map):
         """
-        Co-evolutionary rewiring:
-          - Only suckered agents consider rewiring.
+        Co-evolutionary rewiring with personality-driven homophily:
+          - Only suckered agents or cooperators near chronic defectors consider rewiring.
+          - Agreeableness gates rewiring probability (forgiving agents rewire less).
           - Cut the specific betrayer with lowest reputation.
-          - Seek replacement in 2-hop with highest reputation + cooperating.
+          - Seek replacement via personality-distance homophily (similar personalities attract).
+          - Extraversion controls search radius (high-E searches globally).
           - Recompute A_hat so GCN sees new topology next step.
         """
         rewire_count  = 0
         rewired       = set()
 
         # Expand beyond suckered: any cooperator whose worst neighbor is a
-        # chronic defector (betrayal_rate > 0.5) can consider rewiring.
+        # chronic defector (betrayal_rate > threshold) can consider rewiring.
         all_coops = [n for n in self.agents
                      if self.agents[n].strategy == 1
                      and any(action_map.get(nb) == 0 and
                              self.agents[nb].betrayal_rate > 0.5
                              for nb in self.env.get_neighbors(n))]
-                             
-        # Homophily pruning: Any node connected to someone of a different trait
-        homophily_candidates = [n for n in self.agents
-                                if any(self.agents[nb].trait != self.agents[n].trait 
-                                       for nb in self.env.get_neighbors(n))]
-                                       
+
+        # Personality-distance homophily pruning: agents connected to very
+        # personality-dissimilar neighbors consider rewiring those ties.
+        homophily_candidates = [
+            n for n in self.agents
+            if any(self.agents[n].personality_distance(self.agents[nb]) > HOMOPHILY_THRESHOLD
+                   for nb in self.env.get_neighbors(n))
+        ]
+
         candidates = list(set(suckered_nodes) | set(all_coops) | set(homophily_candidates))
-        candidates = [n for n in candidates if random.random() < self.rewiring_rate]
+
+        # Use the base rewiring_rate directly — personality modulation happens
+        # in who gets cut and who gets chosen, not in whether rewiring fires.
+        candidates = [n for n in candidates
+                      if random.random() < self.rewiring_rate]
         random.shuffle(candidates)
 
         for node in candidates:
@@ -209,19 +239,26 @@ class SimulationEngine:
             if len(neighbors) <= self.MIN_DEGREE:
                 continue
 
-            # Prioritize cutting defectors. If no defectors, cut someone of a different trait.
+            ag = self.agents[node]
+
+            # Prioritize cutting defectors. If no defectors, cut personality-dissimilar.
             betrayers = [nb for nb in neighbors if action_map.get(nb) == 0]
             if betrayers:
                 worst = min(betrayers, key=lambda nb: self.agents[nb].reputation)
             else:
-                aliens = [nb for nb in neighbors if self.agents[nb].trait != self.agents[node].trait]
-                if not aliens:
+                # Cut the most personality-dissimilar neighbor
+                dissimilar = sorted(neighbors,
+                                    key=lambda nb: ag.personality_distance(self.agents[nb]),
+                                    reverse=True)
+                if dissimilar and ag.personality_distance(self.agents[dissimilar[0]]) > HOMOPHILY_THRESHOLD:
+                    worst = dissimilar[0]
+                else:
                     continue
-                worst = random.choice(aliens)
 
-            node_trait = self.agents[node].trait
-            
-            # 2-hop search for a trustworthy cooperator of the SAME trait
+            # Hard MAX_DEGREE cap, but extraversion softens it slightly
+            max_deg = min(self.MAX_DEGREE, ag.max_preferred_degree)
+
+            # 2-hop search for a trustworthy, personality-similar cooperator
             one_hop = set(neighbors)
             two_hop = set()
             for nb in neighbors:
@@ -232,26 +269,37 @@ class SimulationEngine:
 
             good = [nb2 for nb2 in two_hop
                     if self.agents[nb2].strategy == 1
-                    and self.agents[nb2].trait == node_trait
-                    and len(self.env.get_neighbors(nb2)) <= self.MAX_DEGREE]
-            
+                    and ag.personality_distance(self.agents[nb2]) < HOMOPHILY_THRESHOLD
+                    and len(self.env.get_neighbors(nb2)) <= max_deg]
+
             if not good:
-                # If no good 2-hop neighbor, look globally for someone with the matching trait!
-                good = [w for w in range(self.n) 
-                        if w != node and not self.env.graph.has_edge(node, w)
-                        and self.agents[w].strategy == 1
-                        and self.agents[w].trait == node_trait
-                        and len(self.env.get_neighbors(w)) <= self.MAX_DEGREE]
-                
+                # High-extraversion agents search globally when 2-hop fails
+                if ag.extraversion > 0.5:
+                    good = [w for w in range(self.n)
+                            if w != node and not self.env.graph.has_edge(node, w)
+                            and self.agents[w].strategy == 1
+                            and ag.personality_distance(self.agents[w]) < HOMOPHILY_THRESHOLD
+                            and len(self.env.get_neighbors(w)) <= max_deg]
+
+                if not good:
+                    # Fallback: relax homophily constraint, just find any cooperator
+                    good = [nb2 for nb2 in two_hop
+                            if self.agents[nb2].strategy == 1
+                            and len(self.env.get_neighbors(nb2)) <= max_deg]
+
                 if not good:
                     continue
 
-            # Pick the most reputable among the matching traits
-            best = max(good, key=lambda nb2: self.agents[nb2].reputation)
-            
+            # Pick the most personality-similar among valid candidates,
+            # with slight bias toward reputation
+            best = max(good, key=lambda nb2: (
+                ag.personality_similarity(self.agents[nb2]) * 0.7 +
+                self.agents[nb2].reputation * 0.3
+            ))
+
             self.env.remove_edge(node, worst)
             self.env.add_edge(node, best)
-            
+
             if self.env.graph.has_edge(node, best):
                 self.env.graph.edges[node, best]['edge_type'] = 'random'
                 self.env.graph.edges[node, best]['edge_trust'] = 0.1
@@ -265,22 +313,45 @@ class SimulationEngine:
     # ── Main Step ────────────────────────────────────────────────────
 
     def step(self):
-        """One generation of GC-MARL with emergent behavioral specialization."""
+        """One generation of GC-MARL with OCEAN personality modulation."""
         self.global_step += 1
 
-        # 1. Observe state
+        # 1. Observe state (11-dim per node)
         current_state = self._get_node_observations()
 
-        # 2. Boltzmann action selection
+        # 2. Per-agent Boltzmann action selection with personality modulation
         state_tensor = torch.FloatTensor(current_state).to(self.device)
         with torch.no_grad():
-            q_vals  = self.policy_net(self.env_A_hat, state_tensor)
-            scaled  = q_vals / max(self.temp, 1e-4)
+            q_vals = self.policy_net(self.env_A_hat, state_tensor)   # [N, 2]
+
+            # Apply conscientiousness-based Q-sharpness per agent
+            nodes = list(self.agents.keys())
+            sharpness = torch.FloatTensor([
+                self.agents[n].q_sharpness for n in nodes
+            ]).unsqueeze(1).to(self.device)   # [N, 1]
+            q_vals = q_vals * sharpness
+
+            # === DIRECT PERSONALITY BIAS (the key mechanism) ===
+            # Add cooperation propensity as an additive bias to Q-values.
+            # q_vals[:, 0] = defect, q_vals[:, 1] = cooperate
+            # Positive propensity → boost cooperate, penalize defect.
+            propensity = torch.FloatTensor([
+                self.agents[n].cooperation_propensity for n in nodes
+            ]).to(self.device)   # [N]
+            q_vals[:, 1] += propensity    # cooperate gets +bias
+            q_vals[:, 0] -= propensity    # defect gets -bias
+
+            # Per-agent temperature: base temp × openness scaling
+            per_agent_temp = torch.FloatTensor([
+                max(self.agents[n].effective_temperature(self.temp), 1e-4)
+                for n in nodes
+            ]).unsqueeze(1).to(self.device)   # [N, 1]
+
+            scaled  = q_vals / per_agent_temp
             probs   = torch.softmax(scaled, dim=1)
             actions = torch.multinomial(probs, num_samples=1).squeeze(1).cpu().numpy()
 
         # 3. Apply actions
-        nodes          = list(self.agents.keys())
         action_history = np.zeros(self.n, dtype=np.int64)
         for i, node in enumerate(nodes):
             ag            = self.agents[node]
@@ -301,28 +372,62 @@ class SimulationEngine:
             for neighbor in neighbors:
                 opp = self.agents[neighbor].strategy
                 base_payoff = self._payoff(ag.strategy, opp)
-                
+
                 # Fetch dynamic edge trust (starts at 1.0 for local, 0.1 for random)
                 edge_data = self.env.graph.edges.get((node, neighbor), {})
                 edge_trust = edge_data.get('edge_trust', 1.0)
-                
-                # Scale payoff by trust: you earn little from strangers until trust settles
+                edge_type  = edge_data.get('edge_type', 'local')
+
+                # --- Subjective Utility Modifiers ---
+                # These must be LARGE (comparable to base payoffs T=1.3, R=1.0)
+                # so they survive degree-normalization and _normalize_rewards.
+
+                # 1. Agreeableness: warm-glow for cooperation, guilt for exploitation
+                if ag.strategy == 1 and opp == 1:
+                    base_payoff += (ag.agreeableness - 0.5) * 1.0    # up to ±0.5
+                elif ag.strategy == 0 and opp == 1:
+                    base_payoff -= (ag.agreeableness - 0.5) * 1.0    # guilt penalty
+
+                # 2. Neuroticism: betrayal panic, conflict dread
+                if ag.strategy == 1 and opp == 0:
+                    base_payoff -= (ag.neuroticism - 0.5) * 0.8      # suckered pain
+                elif ag.strategy == 0 and opp == 0:
+                    base_payoff -= (ag.neuroticism - 0.5) * 0.6      # conflict stress
+
+                # 3. Conscientiousness: values established trust
+                if edge_trust > 0.8:
+                    base_payoff += (ag.conscientiousness - 0.5) * 0.6
+
+                # 4. Openness: thrill of novel connections
+                if edge_type == 'random':
+                    base_payoff += (ag.openness - 0.5) * 0.8
+
+                # Scale subjective payoff by trust: you earn little from strangers until trust settles
                 ag.add_payoff(base_payoff * edge_trust, opponent_action=opp)
-                
+
                 # Calculate trust evolution (only calculate once per undirected edge)
                 edge_id = tuple(sorted((node, neighbor)))
                 if edge_id not in edge_trust_updates:
+                    # Trust rebuild speed modulated by the PAIR's average agreeableness
+                    pair_agree = (ag.agreeableness +
+                                  self.agents[neighbor].agreeableness) / 2.0
                     if ag.strategy == 1 and opp == 1:
-                        # Mutual cooperation builds trust (max. 1.0)
-                        edge_trust_updates[edge_id] = min(1.0, edge_trust + 0.1)
+                        # Mutual cooperation builds trust. High agreeableness → faster.
+                        trust_gain = 0.05 + 0.15 * pair_agree   # [0.05 .. 0.20]
+                        edge_trust_updates[edge_id] = min(1.0, edge_trust + trust_gain)
                     elif ag.strategy == 0 or opp == 0:
-                        # Defection shatters trust
-                        edge_trust_updates[edge_id] = max(0.0, edge_trust - 0.5)
+                        # Defection shatters trust. Low agreeableness → more severe.
+                        trust_loss = 0.3 + 0.3 * (1.0 - pair_agree)   # [0.3 .. 0.6]
+                        edge_trust_updates[edge_id] = max(0.0, edge_trust - trust_loss)
 
-            # Normalize by neighbour count
+            # --- 4. Extraversion gives a macro-level utility for high degree ---
+            social_bonus = (ag.extraversion - 0.5) * n_neighbors * 0.05
+            ag.add_payoff(social_bonus)
+
+            # Normalize by neighbour count for RL
             raw_rewards[i] = ag.round_payoff / n_neighbors
             self.env.update_node_score(node, ag.round_payoff)
-            
+
         # Apply the edge trust changes back to the graph synchronously
         for (u, v), new_trust in edge_trust_updates.items():
             self.env.update_edge_trust(u, v, new_trust)
@@ -362,8 +467,8 @@ class SimulationEngine:
 
     def get_behavioral_profile(self):
         """
-        Returns aggregated emergent behavioral stats across all agents.
-        Shows what 'personality distribution' emerged without pre-assignment.
+        Returns aggregated emergent behavioral stats across all agents,
+        including personality distribution breakdown.
         """
         trends   = [a.strategy_trend  for a in self.agents.values()]
         betrayal = [a.betrayal_rate   for a in self.agents.values()]
@@ -375,6 +480,32 @@ class SimulationEngine:
         high_betrayed  = sum(1 for b in betrayal if b > 0.4)
         swing_agents   = len(trends) - chronic_coops - chronic_defs
 
+        # Personality statistics
+        personality_stats = {}
+        for dim in OCEAN_DIMS:
+            vals = [a.personality[dim] for a in self.agents.values()]
+            personality_stats[dim] = {
+                'mean': float(np.mean(vals)),
+                'std':  float(np.std(vals)),
+                'min':  float(np.min(vals)),
+                'max':  float(np.max(vals)),
+            }
+
+        # Cooperation rate by personality dimension (binned into Low/Mid/High)
+        coop_by_personality = {}
+        for dim in OCEAN_DIMS:
+            low_coop  = [a.strategy_trend for a in self.agents.values()
+                         if a.personality[dim] < 0.33]
+            mid_coop  = [a.strategy_trend for a in self.agents.values()
+                         if 0.33 <= a.personality[dim] <= 0.67]
+            high_coop = [a.strategy_trend for a in self.agents.values()
+                         if a.personality[dim] > 0.67]
+            coop_by_personality[dim] = {
+                'low':  float(np.mean(low_coop))  if low_coop  else 0.0,
+                'mid':  float(np.mean(mid_coop))  if mid_coop  else 0.0,
+                'high': float(np.mean(high_coop)) if high_coop else 0.0,
+            }
+
         return {
             "avg_strategy_trend":  np.mean(trends),
             "avg_betrayal_rate":   np.mean(betrayal),
@@ -383,7 +514,28 @@ class SimulationEngine:
             "chronic_defectors":   chronic_defs,
             "swing_agents":        swing_agents,
             "high_betrayal":       high_betrayed,
+            "personality_stats":   personality_stats,
+            "coop_by_personality": coop_by_personality,
         }
+
+    def get_personality_data(self):
+        """
+        Returns per-agent personality data for visualization.
+        List of dicts with node_id, OCEAN values, strategy, cooperation_trend.
+        """
+        data = []
+        for node, ag in self.agents.items():
+            entry = {
+                'node_id': node,
+                'strategy': ag.strategy,
+                'cooperation_trend': ag.strategy_trend,
+                'reputation': ag.reputation,
+                'betrayal_rate': ag.betrayal_rate,
+            }
+            for dim in OCEAN_DIMS:
+                entry[dim] = ag.personality[dim]
+            data.append(entry)
+        return data
 
     def inject_defectors(self, count):
         cooperators = [n for n in self.agents if self.agents[n].strategy == 1]

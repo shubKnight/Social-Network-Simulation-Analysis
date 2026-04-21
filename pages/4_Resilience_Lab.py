@@ -2,7 +2,10 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 from engine import SimulationEngine
-from visualization import create_network_figure, _base_layout, hex_to_rgba
+from analytics import personality_archetype_counts, cooperation_by_personality
+from visualization import (create_network_figure, _base_layout, hex_to_rgba,
+                           create_personality_radar, create_personality_cooperation_bars)
+from agent import OCEAN_DIMS
 from theme import (apply_premium_theme, get_colors, render_mode_toggle,
                    styled_header, divider, stat_card)
 
@@ -59,12 +62,19 @@ if st.button("Run Resilience Test", type="primary", use_container_width=True):
     bar = st.progress(0, text="Building cooperative society...")
     step_count = 0
 
+    # Snapshot pre-shock personality archetypes
+    pre_shock_archetypes = None
+
     for i in range(warmup):
         rate = engine.step()
         step_count += 1
         history.append({'Step': step_count, 'Cooperation Rate': rate})
         if i % max(1, warmup // 20) == 0:
             bar.progress(step_count / total, text=f"Warmup | step {i+1}/{warmup}")
+
+    # Capture pre-shock state
+    pre_shock_archetypes = personality_archetype_counts(engine.agents)
+    pre_shock_coop_by_p = cooperation_by_personality(engine.agents)
 
     for shock_i in range(num_shocks):
         engine.inject_defectors(shock_size)
@@ -86,10 +96,19 @@ if st.button("Run Resilience Test", type="primary", use_container_width=True):
             bar.progress(step_count / total, text=f"Recovery | step {i+1}/{recovery}")
 
     bar.empty()
+    
+    # Capture post-recovery state
+    post_archetypes = personality_archetype_counts(engine.agents)
+    post_coop_by_p = cooperation_by_personality(engine.agents)
+    
     st.session_state.res_history = history
     st.session_state.res_shocks = shock_steps
     st.session_state.res_engine = engine
     st.session_state.res_params = {'warmup': warmup, 'shock_size': shock_size, 'p': p}
+    st.session_state.res_pre_archetypes = pre_shock_archetypes
+    st.session_state.res_post_archetypes = post_archetypes
+    st.session_state.res_pre_coop_by_p = pre_shock_coop_by_p
+    st.session_state.res_post_coop_by_p = post_coop_by_p
     st.rerun()
 
 # ── Results ───────────────────────────────────────────────────────
@@ -163,7 +182,71 @@ if 'res_history' in st.session_state:
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Personality Breakdown: Pre-Shock vs Post-Recovery ─────────
+    if 'res_pre_archetypes' in st.session_state and 'res_post_archetypes' in st.session_state:
+        divider()
+        st.markdown(f"<h3 style='margin-bottom:14px;font-size:1.05rem'>Personality Response to Shock</h3>", unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div style="padding:10px 14px;background:{hex_to_rgba(C['accent'], 0.04)};
+                    border:1px solid {hex_to_rgba(C['accent'], 0.12)};border-radius:8px;
+                    color:{C['text_dim']};font-size:0.8rem;line-height:1.5;margin-bottom:14px">
+            Which personality archetypes survived the shock? Did community builders hold firm while
+            opportunists exploited the chaos?
+        </div>
+        """, unsafe_allow_html=True)
+        
+        pre_arch = st.session_state.res_pre_archetypes
+        post_arch = st.session_state.res_post_archetypes
+        
+        archetype_names = [
+            ("Community Builders", 'community_builder', C["cooperator"]),
+            ("Strategic Hubs", 'strategic_hub', C["accent_glow"]),
+            ("Stoic Cooperators", 'stoic_cooperator', C["success"]),
+            ("Social Butterflies", 'social_butterfly', C["warning"]),
+            ("Paranoid Isolationists", 'paranoid_isolationist', C["defector"]),
+            ("Opportunists", 'opportunist', C["danger"]),
+        ]
+        
+        ac = st.columns(6)
+        for i, (label, key, color) in enumerate(archetype_names):
+            pre_val = pre_arch.get(key, 0)
+            post_val = post_arch.get(key, 0)
+            delta = post_val - pre_val
+            delta_str = f"+{delta}" if delta > 0 else str(delta)
+            delta_color = C['cooperator'] if delta >= 0 and key in ('community_builder', 'strategic_hub', 'stoic_cooperator') else (
+                C['defector'] if delta > 0 and key in ('paranoid_isolationist', 'opportunist') else C['text_dim']
+            )
+            ac[i].markdown(f"""
+            <div style="background:{C['surface']};border:1px solid {C['border']};
+                        border-left:3px solid {color};border-radius:10px;
+                        padding:14px 12px;box-shadow:{C['card_shadow']}">
+                <div style="color:{C['text_dim']};font-size:0.68rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">{label}</div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline">
+                    <span style="color:{C['text']};font-size:1.1rem;font-weight:700;font-family:'JetBrains Mono'">{post_val}</span>
+                    <span style="color:{delta_color};font-size:0.75rem;font-weight:600">{delta_str}</span>
+                </div>
+                <div style="color:{C['text_muted']};font-size:0.65rem;margin-top:2px">was {pre_val}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Personality radar for post-recovery state
     if 'res_engine' in st.session_state:
         divider()
+        
+        r1, r2 = st.columns(2)
+        with r1:
+            st.markdown(f"<p style='color:{C['text_dim']};font-size:0.82rem;font-weight:600;margin-bottom:8px'>Post-Recovery OCEAN Profile</p>", unsafe_allow_html=True)
+            st.plotly_chart(create_personality_radar(st.session_state.res_engine.agents),
+                            use_container_width=True)
+        
+        with r2:
+            if 'res_post_coop_by_p' in st.session_state:
+                st.markdown(f"<p style='color:{C['text_dim']};font-size:0.82rem;font-weight:600;margin-bottom:8px'>Cooperation by Personality (Post-Recovery)</p>", unsafe_allow_html=True)
+                st.plotly_chart(create_personality_cooperation_bars(st.session_state.res_post_coop_by_p),
+                                use_container_width=True)
+        
         with st.expander("Final Network State", expanded=False):
-            st.plotly_chart(create_network_figure(st.session_state.res_engine.env), use_container_width=True)
+            st.plotly_chart(create_network_figure(st.session_state.res_engine.env,
+                                                   agents=st.session_state.res_engine.agents),
+                            use_container_width=True)

@@ -35,18 +35,33 @@ class GraphDQN(nn.Module):
     """
     Shared GCN-DQN for all agents.
 
-    State per node (dim=6):
-        [strategy, last_payoff, reputation,
-         strategy_trend, payoff_trend, betrayal_rate]
+    State per node (dim=11):
+        Behavioral (emergent from experience):
+          [strategy, last_payoff, reputation,
+           strategy_trend, payoff_trend, betrayal_rate]
 
-    All features emerge from each agent's own experience — no pre-assignment.
-    Outputs Q-values per node: [Q(Defect), Q(Cooperate)]
+        Personality (intrinsic OCEAN traits):
+          [openness, agreeableness, conscientiousness,
+           extraversion, neuroticism]
+
+    The GCN aggregates neighbor features through message-passing,
+    then an MLP head estimates Q-values: [Q(Defect), Q(Cooperate)].
+
+    Architecture: 3 GCN layers (3-hop receptive field) + 2-layer MLP head.
+    The 3rd GCN layer extends the receptive field so agents can detect
+    personality clusters and cooperation patterns further out in the graph.
     """
-    def __init__(self, state_dim=6, hidden_dim=64, action_dim=2):
+    def __init__(self, state_dim=11, hidden_dim=128, action_dim=2):
         super().__init__()
+        # 3 GCN layers: 1-hop → 2-hop → 3-hop neighborhood aggregation
         self.gc1 = GraphConv(state_dim, hidden_dim)
         self.gc2 = GraphConv(hidden_dim, hidden_dim)
-        # Extra MLP head for richer Q-value estimation
+        self.gc3 = GraphConv(hidden_dim, hidden_dim)
+
+        # Dropout for regularization (MARL can overfit to replay buffer patterns)
+        self.dropout = nn.Dropout(0.1)
+
+        # MLP head for Q-value estimation
         self.fc1 = nn.Linear(hidden_dim, hidden_dim // 2)
         self.fc2 = nn.Linear(hidden_dim // 2, action_dim)
 
@@ -55,6 +70,9 @@ class GraphDQN(nn.Module):
         x = F.relu(self.gc1(A_hat, X))
         # Layer 2: aggregate 2-hop neighbourhood
         x = F.relu(self.gc2(A_hat, x))
+        # Layer 3: aggregate 3-hop neighbourhood (captures personality clusters)
+        x = F.relu(self.gc3(A_hat, x))
+        x = self.dropout(x)
         # MLP head
         x = F.relu(self.fc1(x))
         return self.fc2(x)

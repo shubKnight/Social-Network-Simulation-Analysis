@@ -2,8 +2,9 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 from engine import SimulationEngine
-from analytics import compute_all_metrics
-from visualization import _base_layout
+from analytics import compute_all_metrics, personality_assortativity
+from visualization import _base_layout, hex_to_rgba
+from agent import OCEAN_DIMS
 from theme import (apply_premium_theme, get_colors, get_chart_colors,
                    render_mode_toggle, styled_header, divider, stat_card)
 
@@ -72,12 +73,19 @@ if st.button("Run Comparison", type="primary", use_container_width=True):
             all_histories.append(history)
 
         avg_history = np.mean(all_histories, axis=0).tolist()
-        final_metrics = compute_all_metrics(engine.env)
+        final_metrics = compute_all_metrics(engine.env, agents=engine.agents)
+        
+        # Get personality assortativity for final state
+        p_assort = personality_assortativity(engine.env.graph, engine.agents)
+        avg_assort = np.mean(list(p_assort.values()))
+        
         all_results[gtype] = {
             'label': label, 'color': color,
             'history': avg_history,
             'metrics': final_metrics,
             'final_rates': [h[-1] for h in all_histories],
+            'personality_assortativity': p_assort,
+            'avg_assortativity': avg_assort,
         }
 
     bar.empty()
@@ -111,6 +119,8 @@ if 'compare_results' in st.session_state:
     for i, (gtype, data) in enumerate(results.items()):
         m = data['metrics']
         avg_final = np.mean(data['final_rates'])
+        avg_assort = data.get('avg_assortativity', 0)
+        assort_color = C['cooperator'] if avg_assort > 0 else C['defector']
         with cols[i]:
             st.markdown(f"""
             <div style="background:{C['surface']};border:1px solid {C['border']};
@@ -123,7 +133,10 @@ if 'compare_results' in st.session_state:
                     Gini: <b style="color:{C['text']}">{m['gini_coefficient']:.3f}</b><br>
                     Clustering: <b style="color:{C['text']}">{m['clustering_coefficient']:.3f}</b><br>
                     Avg Path: <b style="color:{C['text']}">{m['avg_path_length']:.2f}</b><br>
-                    Coop Clusters: <b style="color:{C['text']}">{m['num_cooperator_clusters']}</b>
+                    Coop Clusters: <b style="color:{C['text']}">{m['num_cooperator_clusters']}</b><br>
+                    <span style="border-top:1px solid {C['border']};display:inline-block;padding-top:6px;margin-top:4px">
+                    Personality Echo: <b style="color:{assort_color}">{avg_assort:+.3f}</b>
+                    </span>
                 </div>
             </div>
             """, unsafe_allow_html=True)

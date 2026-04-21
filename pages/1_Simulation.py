@@ -3,8 +3,13 @@ import numpy as np
 import pandas as pd
 from engine import SimulationEngine
 from visualization import (create_network_figure, create_cooperation_chart,
-                           create_training_chart)
+                           create_training_chart, create_personality_radar,
+                           create_personality_cooperation_bars,
+                           create_personality_distribution,
+                           create_assortativity_chart,
+                           hex_to_rgba, OCEAN_LABELS)
 from analytics import compute_all_metrics
+from agent import OCEAN_DIMS
 from theme import (apply_premium_theme, get_colors, render_mode_toggle,
                    styled_header, divider, stat_card, section_label)
 
@@ -47,14 +52,14 @@ learning_rate = 10 ** learning_rate_log
 batch_size = ss("Batch Size", 16, 256, 64, 16, "batch_size")
 gamma = ss("Discount Factor", 0.8, 0.999, 0.99, 0.001, "gamma")
 temperature = ss("Initial Temperature", 0.1, 5.0, 2.0, 0.1, "temp",
-                   help="Exploration breadth. Recommended: 2.0")
+                   help="Exploration breadth. Scaled per-agent by Openness.")
 temp_decay = ss("Temperature Decay", 0.9, 0.999, 0.995, 0.001, "temp_decay")
 temp_warmup = ss("Warmup Steps", 0, 200, 100, 10, "temp_warmup")
 init_coop = ss("Initial Cooperator %", 0.0, 1.0, 0.5, 0.05, "init_coop")
 
 section_label("Network Rewiring")
 rewiring_rate = ss("Rewiring Rate", 0.0, 1.0, 0.4, 0.05, "rewiring_rate",
-                   help="Fraction of exploited cooperators that cut defectors.")
+                   help="Base rate — modulated per-agent by Extraversion & Agreeableness.")
 
 section_label("Payoff Matrix")
 with st.sidebar.expander("T > R > P >= S", expanded=False):
@@ -62,6 +67,15 @@ with st.sidebar.expander("T > R > P >= S", expanded=False):
     R = ss_exp("Reward (R)",    0.5, 3.0, 1.0, 0.05, "R")
     P = ss_exp("Punishment (P)", 0.0, 2.0, 0.0, 0.05, "P")
     S = ss_exp("Sucker (S)",   -1.0, 1.0, -0.2, 0.05, "S")
+
+section_label("Visualization")
+color_by = st.sidebar.selectbox(
+    "Color Graph By",
+    ["strategy"] + list(OCEAN_DIMS),
+    format_func=lambda x: "Strategy (Cooperate/Defect)" if x == "strategy" else OCEAN_LABELS.get(x, x),
+    key="color_by",
+    help="Color network nodes by strategy or any OCEAN personality dimension.",
+)
 
 # ── State Tracking ────────────────────────────────────────────────
 if 'is_playing' not in st.session_state:
@@ -165,7 +179,6 @@ with f3:
         st.rerun()
 
 if st.session_state.is_playing:
-    from visualization import hex_to_rgba
     _ind_bg = hex_to_rgba(C['accent'], 0.05)
     _ind_border = hex_to_rgba(C['accent'], 0.2)
     st.markdown(f"""
@@ -184,7 +197,7 @@ if st.session_state.is_playing:
 # ── Metrics Dashboard ─────────────────────────────────────────────
 divider()
 
-metrics = compute_all_metrics(engine.env)
+metrics = compute_all_metrics(engine.env, agents=engine.agents)
 step_n = st.session_state.get('sim_step', 0)
 stranger_frac = engine.get_random_edge_fraction()
 
@@ -231,7 +244,9 @@ with toggle_col1:
 
 def _render_network(key_suffix=""):
     st.markdown(f"<h3 style='font-size:1.05rem;margin-bottom:12px'>Network Graph</h3>", unsafe_allow_html=True)
-    st.plotly_chart(create_network_figure(engine.env), use_container_width=True, key=f"net{key_suffix}")
+    st.plotly_chart(
+        create_network_figure(engine.env, agents=engine.agents, color_by=color_by),
+        use_container_width=True, key=f"net{key_suffix}")
 
     divider()
 
@@ -295,7 +310,6 @@ def _render_profiles(key_suffix=""):
     for i, (label, val, color) in enumerate(profile_data):
         ep[i].markdown(stat_card(label, val, color), unsafe_allow_html=True)
 
-    from visualization import hex_to_rgba
     accent_bg = hex_to_rgba(C['accent'], 0.04)
     accent_border = hex_to_rgba(C['accent'], 0.12)
 
@@ -317,6 +331,62 @@ def _render_profiles(key_suffix=""):
     """, unsafe_allow_html=True)
 
 
+def _render_personality(key_suffix=""):
+    st.markdown(f"<h3 style='margin-bottom:14px;font-size:1.05rem'>OCEAN Personality Analysis</h3>", unsafe_allow_html=True)
+
+    # Personality Archetypes
+    if 'personality_archetypes' in metrics:
+        archetypes = metrics['personality_archetypes']
+        archetype_display = [
+            ("Community Builders", archetypes.get('community_builder', 0), C["cooperator"]),
+            ("Strategic Hubs", archetypes.get('strategic_hub', 0), C["accent_glow"]),
+            ("Stoic Cooperators", archetypes.get('stoic_cooperator', 0), C["success"]),
+            ("Social Butterflies", archetypes.get('social_butterfly', 0), C["warning"]),
+            ("Paranoid Isolationists", archetypes.get('paranoid_isolationist', 0), C["defector"]),
+            ("Opportunists", archetypes.get('opportunist', 0), C["danger"]),
+        ]
+        ac = st.columns(6)
+        for i, (label, val, color) in enumerate(archetype_display):
+            ac[i].markdown(stat_card(label, val, color), unsafe_allow_html=True)
+
+    divider()
+
+    # Radar chart: Cooperators vs Defectors personality profile
+    r1, r2 = st.columns(2)
+    with r1:
+        st.markdown(f"<p style='color:{C['text_dim']};font-size:0.82rem;font-weight:600;margin-bottom:8px'>Cooperator vs Defector OCEAN Profile</p>", unsafe_allow_html=True)
+        st.plotly_chart(create_personality_radar(engine.agents),
+                        use_container_width=True, key=f"radar{key_suffix}")
+
+    with r2:
+        st.markdown(f"<p style='color:{C['text_dim']};font-size:0.82rem;font-weight:600;margin-bottom:8px'>Cooperation Rate by Personality</p>", unsafe_allow_html=True)
+        if 'coop_by_personality' in metrics:
+            st.plotly_chart(create_personality_cooperation_bars(metrics['coop_by_personality']),
+                            use_container_width=True, key=f"coopbar{key_suffix}")
+
+    divider()
+
+    # Personality Distribution (box plots)
+    st.markdown(f"<p style='color:{C['text_dim']};font-size:0.82rem;font-weight:600;margin-bottom:8px'>Personality Distribution by Strategy</p>", unsafe_allow_html=True)
+    st.plotly_chart(create_personality_distribution(engine.agents),
+                    use_container_width=True, key=f"pdist{key_suffix}")
+
+    # Assortativity
+    if 'personality_assortativity' in metrics:
+        divider()
+        st.markdown(f"<p style='color:{C['text_dim']};font-size:0.82rem;font-weight:600;margin-bottom:8px'>Personality Echo Chambers (Assortativity)</p>", unsafe_allow_html=True)
+        st.plotly_chart(create_assortativity_chart(metrics['personality_assortativity']),
+                        use_container_width=True, key=f"assort{key_suffix}")
+        st.markdown(f"""
+        <div style="padding:8px 14px;background:{hex_to_rgba(C['accent'], 0.04)};
+                    border:1px solid {hex_to_rgba(C['accent'], 0.12)};border-radius:8px;
+                    color:{C['text_dim']};font-size:0.78rem;line-height:1.5">
+            Positive values indicate personality-based echo chambers forming (similar agents clustering together).
+            Rewiring drives this — agents preferentially connect to personality-similar others.
+        </div>
+        """, unsafe_allow_html=True)
+
+
 # ── Render based on mode ──────────────────────────────────────────
 
 if st.session_state.show_all:
@@ -326,15 +396,20 @@ if st.session_state.show_all:
     _render_training("_all")
     divider()
     _render_profiles("_all")
+    divider()
+    _render_personality("_all")
 else:
     # Tabbed view
-    tab_net, tab_train, tab_profile = st.tabs(["Network Graph", "Training Analytics", "Agent Profiles"])
+    tab_net, tab_train, tab_profile, tab_personality = st.tabs(
+        ["Network Graph", "Training Analytics", "Agent Profiles", "Personality"])
     with tab_net:
         _render_network("_tab")
     with tab_train:
         _render_training("_tab")
     with tab_profile:
         _render_profiles("_tab")
+    with tab_personality:
+        _render_personality("_tab")
 
 # ── Execution Tail ────────────────────────────────────────────────
 if st.session_state.is_playing:
