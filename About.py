@@ -28,15 +28,15 @@ st.markdown(f"""
         letter-spacing:-0.03em;
         margin:0 0 8px 0;
         color:{C['text']} !important;
-    ">The Topology of Trust</h1>
+    ">Topology of Trust</h1>
     <p style="
         color:{C['text_dim']};
         font-size:1.05rem;
-        max-width:600px;
+        max-width:640px;
         margin:0 auto;
         line-height:1.7;
     ">
-        Graph Convolutional Multi-Agent Reinforcement Learning<br>
+        Graph Convolutional Multi-Agent Reinforcement Learning</br>
         for Modelling Cooperation Dynamics on Social Networks
     </p>
 </div>
@@ -60,21 +60,109 @@ st.markdown(f"""
         Research Question
     </p>
     <p style="color:{C['accent_glow']};font-size:1.35rem;font-weight:700;margin:0;font-style:italic">
-        Does the structure of a social network determine whether trust can survive?
+        How do individual personality and network structure interact to determine whether cooperation can survive?
     </p>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Navigation Cards ─────────────────────────────────────────────
+# ── What This Is ──────────────────────────────────────────────────
+divider()
+
+st.markdown(f"<h2 style='text-align:center;margin-bottom:24px;font-size:1.3rem'>About the Simulation</h2>", unsafe_allow_html=True)
+
+overview_text = f"""
+<div style="
+    max-width:760px;margin:0 auto;
+    padding:22px 26px;
+    background:{C['surface']};
+    border:1px solid {C['border']};
+    border-radius:12px;
+    box-shadow:{C['card_shadow']};
+    color:{C['text']};
+    font-size:0.88rem;
+    line-height:1.75;
+">
+    <p style="margin:0 0 14px 0">
+        This framework simulates the emergence of cooperation and defection in social networks.
+        Each agent is governed by a <b>shared Graph Convolutional Network</b> (GCN) that performs
+        3-hop neighbourhood aggregation — allowing agents to perceive cooperation patterns
+        across their extended social graph — and an intrinsic
+        <b>OCEAN personality profile</b> drawn from psychology's Big Five model.
+    </p>
+    <p style="margin:0 0 14px 0">
+        Agents interact through the Iterated Prisoner's Dilemma, rewire their connections
+        based on personality homophily, and learn strategies through Deep Q-Learning.
+        Personality traits drift dynamically based on social experiences: betrayal raises
+        neuroticism, mutual cooperation builds agreeableness, and exposure to strangers
+        modulates openness.
+    </p>
+    <p style="margin:0">
+        The result is a self-organising system where personality-driven echo chambers,
+        trust clusters, and defection cascades emerge without any hardcoded behavioural rules.
+    </p>
+</div>
+"""
+st.markdown(overview_text, unsafe_allow_html=True)
+
+# ── Architecture ──────────────────────────────────────────────────
+divider()
+
+st.markdown(f"<h2 style='text-align:center;margin-bottom:24px;font-size:1.3rem'>Technical Architecture</h2>", unsafe_allow_html=True)
+
+arch_items = [
+    ("Graph Convolutional Network",
+     "A 3-layer GCN reads the full network adjacency matrix, performing message-passing so each agent's decision is informed by its 3-hop neighbourhood. An MLP head estimates Q-values for Cooperate and Defect.",
+     C["cooperator"]),
+    ("OCEAN Personality Model",
+     "Each agent carries five continuous personality traits (Openness, Conscientiousness, Extraversion, Agreeableness, Neuroticism) allocated via a Dirichlet-constrained budget. These traits directly modulate exploration, discount factor, rewiring aggression, and emotional reactivity.",
+     C["accent_glow"]),
+    ("Dynamic Edge Trust",
+     "Every connection carries a trust value between 0 and 1 that evolves with interaction. Mutual cooperation builds trust incrementally; defection shatters it. Payoffs are scaled by trust, modelling the asymmetry between slow trust-building and rapid trust destruction.",
+     C["warning"]),
+    ("Co-Evolutionary Rewiring",
+     "Exploited agents can sever connections to chronic defectors and seek personality-similar replacements via homophily. This drives the spontaneous formation of cooperative clusters and personality-based echo chambers.",
+     C["success"]),
+    ("Personality Drift",
+     "Traits are not static. Social experiences shift personality over time — being suckered raises neuroticism, cooperation builds agreeableness, novel encounters modulate openness. A baseline regression anchor prevents population-wide psychological collapse.",
+     C["defector"]),
+]
+
+for title, desc, color in arch_items:
+    st.markdown(f"""
+    <div style="
+        display:flex;align-items:flex-start;gap:16px;
+        padding:16px 20px;margin:8px auto;
+        max-width:760px;
+        background:{C['surface']};
+        border-left:3px solid {color};
+        border-radius:8px;
+        box-shadow:{C['card_shadow']};
+    ">
+        <div>
+            <div style="color:{C['text']};font-weight:700;font-size:0.92rem;margin-bottom:6px">{title}</div>
+            <div style="color:{C['text_dim']};font-size:0.82rem;line-height:1.6">{desc}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ── Experiment Modules ───────────────────────────────────────────
 divider()
 
 st.markdown(f"<h2 style='text-align:center;margin-bottom:24px;font-size:1.3rem'>Experiment Modules</h2>", unsafe_allow_html=True)
 
 nav_items = [
-    ("Simulation", "Run the live simulation. Watch agents cooperate and defect in real-time on an interactive network graph.", C["cooperator"]),
-    ("Phase Transition", "Automated sweep of network randomness to find the exact tipping point where trust collapses.", C["warning"]),
-    ("Network Compare", "Compare how trust evolves on different network types: Small-World, Scale-Free, Random, and Grid.", C["accent_glow"]),
-    ("Resilience Lab", "Shock a stable cooperative society by injecting defectors. Can the network recover?", C["defector"]),
+    ("Live Simulation",
+     "Run the simulation in real-time. Configure network topology, payoff matrix, and RL hyperparameters. Visualise the network graph, cooperation timeline, personality radar charts, and training analytics.",
+     C["cooperator"]),
+    ("Phase Transition",
+     "Automated sweep across network randomness to identify the critical threshold where cooperative structures collapse as the network transitions from lattice to random graph.",
+     C["warning"]),
+    ("Network Comparison",
+     "Side-by-side comparison of how trust evolves on Small-World, Scale-Free, Random, and Grid topologies under identical parameters. Reveals the structural determinants of cooperation.",
+     C["accent_glow"]),
+    ("Resilience Lab",
+     "Controlled shock-and-recovery experiments. Injects defectors with configurable size, frequency, and cascade depth. Measures whether the network can self-heal from targeted disruption.",
+     C["defector"]),
 ]
 
 cols = st.columns(4)
@@ -87,7 +175,7 @@ for i, (title, desc, color) in enumerate(nav_items):
             border-top:3px solid {color};
             border-radius:12px;
             padding:22px 18px;
-            min-height:180px;
+            min-height:200px;
             box-shadow:{C['card_shadow']};
         ">
             <div style="color:{C['text']};font-weight:700;font-size:0.95rem;margin-bottom:10px">{title}</div>
@@ -95,36 +183,37 @@ for i, (title, desc, color) in enumerate(nav_items):
         </div>
         """, unsafe_allow_html=True)
 
-# ── How It Works ──────────────────────────────────────────────────
+# ── Tech Stack ────────────────────────────────────────────────────
 divider()
 
-st.markdown(f"<h2 style='text-align:center;margin-bottom:24px;font-size:1.3rem'>How It Works</h2>", unsafe_allow_html=True)
+st.markdown(f"<h2 style='text-align:center;margin-bottom:24px;font-size:1.3rem'>Stack</h2>", unsafe_allow_html=True)
 
-how_items = [
-    ("100 AI agents live on graph nodes, each powered by a shared Graph Convolutional Network (GCN) that reads the entire network topology.", C["success"]),
-    ("Edges represent social connections. Agents interact with their neighbours via the Iterated Prisoner's Dilemma — cooperate or betray.", C["accent_glow"]),
-    ("The GCN learns Q-values for every node simultaneously via Deep Q-Learning with experience replay and target network stabilisation.", C["cooperator"]),
-    ("Exploited cooperators dynamically rewire — cutting untrustworthy defectors and seeking reputable partners in their 2-hop neighbourhood.", C["warning"]),
-    ("Topology matters. In local networks, cooperators form defensive clusters. As randomness increases (like social media), trust erodes.", C["defector"]),
+stack_items = [
+    ("Python 3.9+", "Core language"),
+    ("PyTorch", "GCN-DQN, experience replay, Huber loss training"),
+    ("NetworkX", "Graph generation, topological metrics, rewiring"),
+    ("Streamlit", "Interactive dashboard and real-time controls"),
+    ("Plotly", "Network visualisation, charts, and personality analysis"),
+    ("NumPy", "Numerical computation and analytics"),
 ]
 
-for text, color in how_items:
-    st.markdown(f"""
-    <div style="
-        display:flex;align-items:flex-start;gap:14px;
-        padding:14px 18px;margin:6px 0;
-        background:{C['surface']};
-        border-left:3px solid {color};
-        border-radius:8px;
-    ">
+stack_cols = st.columns(6)
+for i, (name, role) in enumerate(stack_items):
+    with stack_cols[i]:
+        st.markdown(f"""
         <div style="
-            width:6px;height:6px;min-width:6px;
-            background:{color};border-radius:50%;
-            margin-top:7px;
-        "></div>
-        <span style="color:{C['text']};font-size:0.88rem;line-height:1.6">{text}</span>
-    </div>
-    """, unsafe_allow_html=True)
+            background:{C['surface']};
+            border:1px solid {C['border']};
+            border-radius:10px;
+            padding:16px 12px;
+            text-align:center;
+            box-shadow:{C['card_shadow']};
+            min-height:90px;
+        ">
+            <div style="color:{C['text']};font-weight:700;font-size:0.85rem;margin-bottom:6px">{name}</div>
+            <div style="color:{C['text_muted']};font-size:0.72rem;line-height:1.4">{role}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ── Footer ────────────────────────────────────────────────────────
 divider()
@@ -134,8 +223,8 @@ st.markdown(f"""
     <p style="color:{C['text_dim']};font-size:1.05rem;font-style:italic;font-weight:500;margin-bottom:8px">
         "A few global shortcuts can destroy centuries of locally-built trust."
     </p>
-    <p style="color:{C['text_muted']};font-size:0.78rem">
-        Python · PyTorch · NetworkX · Streamlit · Plotly
+    <p style="color:{C['text_muted']};font-size:0.72rem;margin-top:12px">
+        Topology of Trust — Shubham Kumar
     </p>
 </div>
 """, unsafe_allow_html=True)

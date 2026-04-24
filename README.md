@@ -8,6 +8,9 @@ A simulation framework that models the emergence of cooperation and defection in
 [![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-red.svg)](https://streamlit.io)
 [![PyTorch](https://img.shields.io/badge/PyTorch-Deep%20Learning-orange.svg)](https://pytorch.org)
 [![NetworkX](https://img.shields.io/badge/NetworkX-Graph%20Theory-green.svg)](https://networkx.org)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Streamlit_Cloud-FF4B4B.svg)](https://network-analysis.streamlit.app/)
+
+**Live Demo:** [https://network-analysis.streamlit.app](https://network-analysis.streamlit.app/)
 
 ---
 
