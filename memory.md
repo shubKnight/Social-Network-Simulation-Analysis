@@ -146,6 +146,30 @@ This document serves as the historical technical log and "brain memory" for the 
 - **Result**: Models real-world "hesitancy." A new connection yields almost no reward initially. But if agents continuously cooperate despite low payouts, the edge trust "settles" up to 1.0, restoring full payoff potential. Betrayal instantly shatters established trust.
 
 
+---
+
+### [Session 13] Personality Dynamics (OCEAN) & Resilience Lab
+- **Psychological Depth**: Integrated a continuous 5-dimensional **OCEAN (Big Five)** personality model, moving beyond simple strategy trends:
+  - **Openness**: Scales per-agent Boltzmann temperature (exploration breadth).
+  - **Conscientiousness**: Scales effective $\gamma$ (long-term vs. short-term strategic discipline).
+  - **Extraversion**: Controls social reach (max degree and rewiring aggression).
+  - **Agreeableness**: Gates rewiring sensitivity and speeds trust recovery.
+  - **Neuroticism**: Amplifies emotional reactivity to recent payoff swings.
+- **Dynamic Personality Drift**:
+  - Personality traits now evolve based on in-game experiences (e.g., mutual cooperation builds agreeableness; being suckered spikes neuroticism).
+  - **Baseline Regression**: To prevent "psychological collapse" across the population, traits regress toward their birth baseline at a rate of 15% per round.
+- **Resilience Lab & Shock Mechanics**:
+  - Solved the "invisible shock" problem where injected defectors reverted instantly to cooperation.
+  - **Trauma Lockout**: Injected agents are now "locked" into defection for 30 rounds, simulating radicalization that overrides the GCN policy. Neighbors suffer a shorter 8-round lockout (cascade trauma).
+  - **Baseline Anchor Shift**: Shocks now shift the baseline (regression anchor) itself by 60%, making the trauma persistent and requiring long-term social healing to reverse.
+- **Technical Architecture: Dual-Batching**:
+  - **Simulation Batch**: The entire population of agents ($N$) is processed in a single forward pass for real-time decision making.
+  - **Training Batch**: 64 historical network snapshots are sampled from the `ReplayBuffer` to update the GCN, allowing the model to learn from 64 "parallel worlds" at once.
+- **GCN Feature Wiring**: Replaced raw `payoff_trend` with `weighted_payoff_trend` in the observation vector, making an agent's neuroticism directly visible to the RL policy.
+- **Score EMA**: Replaced infinite score accumulation with an **Exponential Moving Average** ($0.95 \cdot old + 0.05 \cdot new$). This keeps scores bounded and ensures visualization (node sizes) remains meaningful over long simulations.
+
+'''''comment'''''
+'''''''''
 Next Significant addition: 
 The "Homophily" Engine update (Birds of a Feather)
 In sociology, networks fracture into clusters (like echo chambers) because of Homophily—the tendency of individuals to associate and bond with similar others.
@@ -154,3 +178,5 @@ Hidden Traits: When agents spawn, they are now secretly assigned into one of thr
 Affinity-Biased Rewiring: I rewrote the logic for how agents choose new connections after being betrayed by defectors. Previously, they just looked 2-hops away for the agent with the highest mathematical "reputation" globally, which forced everyone to bind to the same super-hubs, creating one giant unescapable blob.
 Logical Clustering: Now, replacement nodes are chosen via an Affinity Score. Agents will heavily bias connecting to reputable cooperators who share their exact hidden trait.
 Global Long-Range Matchmaking: If an agent is stranded in a toxic local area, they will now actively bridge across the network to find an isolated cooperator who shares their trait, rather than just settling for a random local.
+
+''''''''''

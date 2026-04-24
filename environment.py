@@ -120,7 +120,10 @@ class SocialNetwork:
         self.graph.nodes[node_id]['state'] = new_state
         
     def update_node_score(self, node_id, reward):
-        self.graph.nodes[node_id]['score'] += reward
+        # EMA: recent performance matters more than ancient history.
+        # Prevents scores from growing unboundedly over hundreds of steps.
+        old_score = self.graph.nodes[node_id]['score']
+        self.graph.nodes[node_id]['score'] = 0.95 * old_score + 0.05 * reward
         self.graph.nodes[node_id]['round_reward'] = reward
 
     def remove_edge(self, u, v):

@@ -23,11 +23,11 @@ with st.sidebar:
     n = st.slider("Nodes (N)", 20, 200, 100, 10)
     k = st.slider("Neighbors (K)", 2, 20, 6, 2)
     p = st.slider("Randomness (p)", 0.0, 1.0, 0.0, 0.01)
-    T = st.slider("Temptation (T)", 0.5, 2.0, 1.3, 0.05)
+    T = st.slider("Temptation (T)", 0.5, 2.0, 1.5, 0.05)
 
     st.markdown(f"<p style='color:{C['defector']};font-weight:600;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.06em;margin-top:16px'>Shock Parameters</p>", unsafe_allow_html=True)
     warmup = st.slider("Warmup Steps", 50, 500, 200, 50)
-    shock_size = st.slider("Defectors to Inject", 1, 50, 10, 1)
+    shock_size = st.slider("Defectors to Inject", 5, 80, 25, 5)
     recovery = st.slider("Recovery Steps", 50, 500, 300, 50)
     num_shocks = st.slider("Number of Shocks", 1, 5, 1)
     shock_interval = st.slider("Steps Between Shocks", 50, 200, 100, 25)
@@ -53,8 +53,9 @@ for i, (title, val, desc, color) in enumerate(info_data):
 st.write("")
 
 if st.button("Run Resilience Test", type="primary", use_container_width=True):
-    engine = SimulationEngine(n=n, k=k, p=p, T=T, R=1.0, P=0.0, S=0.0,
-                               init_coop_fraction=0.8, temperature=0.05, temp_decay=1.0)
+    engine = SimulationEngine(n=n, k=k, p=p, T=T, R=1.0, P=0.1, S=-0.3,
+                               temperature=2.0, temp_decay=0.995,
+                               temp_warmup=50, rewiring_rate=0.3)
 
     history = []
     shock_steps = []
@@ -62,13 +63,14 @@ if st.button("Run Resilience Test", type="primary", use_container_width=True):
     bar = st.progress(0, text="Building cooperative society...")
     step_count = 0
 
-    # Snapshot pre-shock personality archetypes
     pre_shock_archetypes = None
 
+    # Phase 1: Warmup
     for i in range(warmup):
         rate = engine.step()
         step_count += 1
-        history.append({'Step': step_count, 'Cooperation Rate': rate})
+        c, d = engine.get_strategy_counts()
+        history.append({'Step': step_count, 'Cooperation Rate': rate, 'Cooperators': c, 'Defectors': d, 'Phase': 'Warmup'})
         if i % max(1, warmup // 20) == 0:
             bar.progress(step_count / total, text=f"Warmup | step {i+1}/{warmup}")
 
@@ -76,35 +78,43 @@ if st.button("Run Resilience Test", type="primary", use_container_width=True):
     pre_shock_archetypes = personality_archetype_counts(engine.agents)
     pre_shock_coop_by_p = cooperation_by_personality(engine.agents)
 
+    # Phase 2: Shocks
     for shock_i in range(num_shocks):
         engine.inject_defectors(shock_size)
         shock_steps.append(step_count + 1)
+
+        # Record the INSTANT post-shock state (before any step runs)
+        c_imm, d_imm = engine.get_strategy_counts()
+        history.append({'Step': step_count + 0.5, 'Cooperation Rate': c_imm / n, 'Cooperators': c_imm, 'Defectors': d_imm, 'Phase': 'Shock'})
+
         bar.progress(step_count / total, text=f"SHOCK {shock_i+1} — injecting {shock_size} defectors")
 
         for i in range(shock_interval):
             rate = engine.step()
             step_count += 1
-            history.append({'Step': step_count, 'Cooperation Rate': rate})
+            c, d = engine.get_strategy_counts()
+            history.append({'Step': step_count, 'Cooperation Rate': rate, 'Cooperators': c, 'Defectors': d, 'Phase': 'Post-Shock'})
             if i % max(1, shock_interval // 10) == 0:
                 bar.progress(step_count / total, text=f"Post-shock {shock_i+1} | step {i+1}/{shock_interval}")
 
+    # Phase 3: Recovery
     for i in range(recovery):
         rate = engine.step()
         step_count += 1
-        history.append({'Step': step_count, 'Cooperation Rate': rate})
+        c, d = engine.get_strategy_counts()
+        history.append({'Step': step_count, 'Cooperation Rate': rate, 'Cooperators': c, 'Defectors': d, 'Phase': 'Recovery'})
         if i % max(1, recovery // 10) == 0:
             bar.progress(step_count / total, text=f"Recovery | step {i+1}/{recovery}")
 
     bar.empty()
-    
-    # Capture post-recovery state
+
     post_archetypes = personality_archetype_counts(engine.agents)
     post_coop_by_p = cooperation_by_personality(engine.agents)
-    
+
     st.session_state.res_history = history
     st.session_state.res_shocks = shock_steps
     st.session_state.res_engine = engine
-    st.session_state.res_params = {'warmup': warmup, 'shock_size': shock_size, 'p': p}
+    st.session_state.res_params = {'warmup': warmup, 'shock_size': shock_size, 'p': p, 'n': n}
     st.session_state.res_pre_archetypes = pre_shock_archetypes
     st.session_state.res_post_archetypes = post_archetypes
     st.session_state.res_pre_coop_by_p = pre_shock_coop_by_p
@@ -121,32 +131,81 @@ if 'res_history' in st.session_state:
 
     steps_list = [h['Step'] for h in history]
     rates = [h['Cooperation Rate'] for h in history]
+    cooperators = [h.get('Cooperators', h['Cooperation Rate'] * params.get('n', 100)) for h in history]
 
-    fig = go.Figure()
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.6, 0.4], vertical_spacing=0.08,
+        subplot_titles=("Cooperation Rate", "Cooperator Count"),
+    )
 
     # Shade warmup zone
-    fig.add_vrect(x0=0, x1=params['warmup'],
-                  fillcolor=hex_to_rgba(C['success'], 0.03), line_width=0,
-                  annotation_text="Warmup", annotation_position="top left",
-                  annotation_font=dict(color=C["success"], size=10))
+    for row in [1, 2]:
+        fig.add_vrect(x0=0, x1=params['warmup'],
+                      fillcolor=hex_to_rgba(C['success'], 0.04), line_width=0,
+                      row=row, col=1)
 
-    fig.add_trace(go.Scatter(
-        x=steps_list, y=rates, mode='lines', name='Cooperation Rate',
-        line=dict(color=C["cooperator"], width=2.5),
-        fill='tozeroy', fillcolor=hex_to_rgba(C['cooperator'], 0.06),
-    ))
+    # Shade shock zones in red
+    for ss_val in shocks:
+        for row in [1, 2]:
+            fig.add_vrect(x0=ss_val - 1, x1=ss_val + max(20, params.get('shock_size', 10)),
+                          fillcolor=hex_to_rgba(C['defector'], 0.06), line_width=0,
+                          row=row, col=1)
 
+    # ── Top: Cooperation Rate ──
+    # Raw (faint)
+    fig.add_trace(go.Scattergl(
+        x=steps_list, y=rates, mode='lines', name='Raw Rate',
+        line=dict(color=C["cooperator"], width=1), opacity=0.25,
+        showlegend=True,
+    ), row=1, col=1)
+
+    # Tight MA (window=5) to preserve shock visibility
+    if len(rates) > 5:
+        window = 5
+        smoothed = np.convolve(rates, np.ones(window) / window, mode='valid')
+        sm_steps = [steps_list[i] for i in range(window - 1, min(window - 1 + len(smoothed), len(steps_list)))]
+        sm_steps = sm_steps[:len(smoothed)]
+        fig.add_trace(go.Scattergl(
+            x=sm_steps, y=list(smoothed), mode='lines',
+            name='Smoothed (MA-5)',
+            line=dict(color=C["cooperator"], width=3),
+            fill='tozeroy', fillcolor=hex_to_rgba(C['cooperator'], 0.06),
+        ), row=1, col=1)
+
+    # ── Bottom: Cooperator Count (area chart — shock drop is unmistakable) ──
+    fig.add_trace(go.Scattergl(
+        x=steps_list, y=cooperators, mode='lines', name='Cooperators',
+        line=dict(color=C["accent_glow"], width=2),
+        fill='tozeroy', fillcolor=hex_to_rgba(C['accent_glow'], 0.12),
+        showlegend=True,
+    ), row=2, col=1)
+
+    # Shock markers
     for i, ss_val in enumerate(shocks):
-        fig.add_vline(x=ss_val, line_dash="dash", line_color=C["defector"], line_width=2)
-        fig.add_annotation(x=ss_val, y=1.05, text=f"Shock {i+1}",
-                          showarrow=False, font=dict(color=C["defector"], size=10, family="Inter"))
+        for row in [1, 2]:
+            fig.add_vline(x=ss_val, line_dash="dash", line_color=C["defector"],
+                          line_width=2, row=row, col=1)
+        fig.add_annotation(x=ss_val, y=1.08, text=f"⚡ Shock {i+1}",
+                          showarrow=False,
+                          font=dict(color=C["defector"], size=11, family="Inter"),
+                          xref='x', yref='y')
 
     fig.update_layout(**_base_layout(
-        xaxis_title="Step", yaxis_title="Cooperation Rate",
-        yaxis=dict(range=[0, 1.12], gridcolor=C["grid"]),
-        height=480,
+        height=600, showlegend=True,
+        legend=dict(x=0.7, y=0.98, font=dict(size=10, color=C['text_dim'])),
         title=dict(text="Resilience Timeline", font=dict(size=13, color=C["text_dim"])),
     ))
+    fig.update_yaxes(range=[0, 1.12], gridcolor=C["grid"], row=1, col=1)
+    fig.update_yaxes(gridcolor=C["grid"], row=2, col=1)
+    fig.update_xaxes(title_text="Step", row=2, col=1)
+
+    for ann in fig.layout.annotations:
+        if hasattr(ann, 'font') and ann.font is None:
+            ann.font = dict(size=11, color=C['text_dim'], family='Inter')
+
     st.plotly_chart(fig, use_container_width=True)
 
     # Verdict

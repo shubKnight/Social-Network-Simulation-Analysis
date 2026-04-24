@@ -29,15 +29,14 @@ from models import GraphDQN, ReplayBuffer
 # Personality-distance threshold for homophily rewiring.
 # Agents prefer connecting to others within this distance.
 # With normal(0.5, 0.2) in 5D, average pairwise distance ≈ 0.28.
-# 0.20 means only the top ~30% most-similar agents pass the filter,
-# driving strong cluster formation like the old 3-trait system.
-HOMOPHILY_THRESHOLD = 0.20
+# 0.30 balances cluster formation with network stability.
+HOMOPHILY_THRESHOLD = 0.30
 
 
 class SimulationEngine:
     def __init__(self,
                  n=100, k=6, p=0.0,
-                 T=1.3, R=1.0, P=0.0, S=0.0,
+                 T=1.5, R=1.0, P=0.1, S=-0.3,
                  init_coop_fraction=0.5,
                  graph_type="watts_strogatz",
                  learning_rate=1e-3,
@@ -87,16 +86,24 @@ class SimulationEngine:
 
         self.agents  = {}
         all_nodes    = list(self.env.graph.nodes())
-        num_coop     = int(len(all_nodes) * init_coop_fraction)
-        coop_nodes   = set(random.sample(all_nodes, num_coop))
 
         for node in all_nodes:
-            self.agents[node] = NeuralAgent(
+            ag = NeuralAgent(
                 node_id    = node,
-                strategy   = 1 if node in coop_nodes else 0,
+                strategy   = 1,       # temporary, overridden below
                 max_payoff = max_payoff,
             )
-            self.env.update_node_state(node, self.agents[node].strategy)
+            # Initial strategy follows personality:
+            # positive propensity → cooperate, negative → defect,
+            # with some randomness for agents near zero.
+            if ag.cooperation_propensity > 0.05:
+                ag.strategy = 1
+            elif ag.cooperation_propensity < -0.05:
+                ag.strategy = 0
+            else:
+                ag.strategy = random.choice([0, 1])
+            self.agents[node] = ag
+            self.env.update_node_state(node, ag.strategy)
 
     # ── Graph Utilities ──────────────────────────────────────────────
 
@@ -136,7 +143,7 @@ class SimulationEngine:
             X[i, 1] = ag.round_payoff
             X[i, 2] = ag.reputation
             X[i, 3] = ag.strategy_trend
-            X[i, 4] = ag.payoff_trend
+            X[i, 4] = ag.weighted_payoff_trend   # neuroticism-weighted (not raw)
             X[i, 5] = ag.betrayal_rate
             # Personality features (intrinsic OCEAN)
             X[i, 6]  = ag.openness
@@ -213,7 +220,7 @@ class SimulationEngine:
         all_coops = [n for n in self.agents
                      if self.agents[n].strategy == 1
                      and any(action_map.get(nb) == 0 and
-                             self.agents[nb].betrayal_rate > 0.5
+                             self.agents[nb].reputation < 0.4
                              for nb in self.env.get_neighbors(n))]
 
         # Personality-distance homophily pruning: agents connected to very
@@ -258,7 +265,12 @@ class SimulationEngine:
             # Hard MAX_DEGREE cap, but extraversion softens it slightly
             max_deg = min(self.MAX_DEGREE, ag.max_preferred_degree)
 
-            # 2-hop search for a trustworthy, personality-similar cooperator
+            # 2-hop search for a personality-similar agent (homophily-driven).
+            # NO hard strategy filter — personality similarity is the primary
+            # driver. Agreeable agents will find agreeable agents (who tend to
+            # cooperate), neurotic agents find neurotic agents (who tend to
+            # defect). This creates personality-based clusters, not
+            # strategy-based echo chambers.
             one_hop = set(neighbors)
             two_hop = set()
             for nb in neighbors:
@@ -268,8 +280,7 @@ class SimulationEngine:
             two_hop.discard(node)
 
             good = [nb2 for nb2 in two_hop
-                    if self.agents[nb2].strategy == 1
-                    and ag.personality_distance(self.agents[nb2]) < HOMOPHILY_THRESHOLD
+                    if ag.personality_distance(self.agents[nb2]) < HOMOPHILY_THRESHOLD
                     and len(self.env.get_neighbors(nb2)) <= max_deg]
 
             if not good:
@@ -277,21 +288,19 @@ class SimulationEngine:
                 if ag.extraversion > 0.5:
                     good = [w for w in range(self.n)
                             if w != node and not self.env.graph.has_edge(node, w)
-                            and self.agents[w].strategy == 1
                             and ag.personality_distance(self.agents[w]) < HOMOPHILY_THRESHOLD
                             and len(self.env.get_neighbors(w)) <= max_deg]
 
                 if not good:
-                    # Fallback: relax homophily constraint, just find any cooperator
+                    # Fallback: relax homophily, find any non-neighbor
                     good = [nb2 for nb2 in two_hop
-                            if self.agents[nb2].strategy == 1
-                            and len(self.env.get_neighbors(nb2)) <= max_deg]
+                            if len(self.env.get_neighbors(nb2)) <= max_deg]
 
                 if not good:
                     continue
 
             # Pick the most personality-similar among valid candidates,
-            # with slight bias toward reputation
+            # with reputation as a soft tiebreaker (not a hard filter)
             best = max(good, key=lambda nb2: (
                 ag.personality_similarity(self.agents[nb2]) * 0.7 +
                 self.agents[nb2].reputation * 0.3
@@ -301,10 +310,22 @@ class SimulationEngine:
             self.env.add_edge(node, best)
 
             if self.env.graph.has_edge(node, best):
-                self.env.graph.edges[node, best]['edge_type'] = 'random'
-                self.env.graph.edges[node, best]['edge_trust'] = 0.1
+                # Smart labeling: personality-similar matches are 'local' (kindred spirit),
+                # only true strangers from the fallback path get 'random'.
+                dist = ag.personality_distance(self.agents[best])
+                if dist < HOMOPHILY_THRESHOLD:
+                    self.env.graph.edges[node, best]['edge_type'] = 'local'
+                    self.env.graph.edges[node, best]['edge_trust'] = 0.5
+                else:
+                    self.env.graph.edges[node, best]['edge_type'] = 'random'
+                    self.env.graph.edges[node, best]['edge_trust'] = 0.1
             rewired.add(node)
             rewire_count += 1
+
+            # Cap rewires per step to prevent full-graph churn
+            max_rewires = max(3, int(self.env.graph.number_of_edges() * 0.15))
+            if rewire_count >= max_rewires:
+                break
 
         self.last_rewire_count = rewire_count
         if rewire_count > 0:
@@ -351,11 +372,17 @@ class SimulationEngine:
             probs   = torch.softmax(scaled, dim=1)
             actions = torch.multinomial(probs, num_samples=1).squeeze(1).cpu().numpy()
 
-        # 3. Apply actions
+        # 3. Apply actions (with trauma lockout override)
         action_history = np.zeros(self.n, dtype=np.int64)
         for i, node in enumerate(nodes):
             ag            = self.agents[node]
             action        = int(actions[i])
+
+            # Trauma lockout: forced defection, GCN cannot override
+            if ag.trauma_lockout > 0:
+                action = 0
+                ag.trauma_lockout -= 1
+
             ag.strategy   = action
             action_history[i] = action
             self.env.update_node_state(node, action)
@@ -369,6 +396,18 @@ class SimulationEngine:
             ag        = self.agents[node]
             neighbors = self.env.get_neighbors(node)
             n_neighbors = max(len(neighbors), 1)
+
+            # Dictionary to track round events for dynamic personality drift
+            round_events = {
+                'mutual_coop': 0,
+                'suckered': 0,
+                'mutual_defection': 0,
+                'stranger_success': False,
+                'stranger_betrayal': False,
+                'avg_payoff': 0.0,
+                'degree': len(neighbors)
+            }
+
             for neighbor in neighbors:
                 opp = self.agents[neighbor].strategy
                 base_payoff = self._payoff(ag.strategy, opp)
@@ -378,29 +417,43 @@ class SimulationEngine:
                 edge_trust = edge_data.get('edge_trust', 1.0)
                 edge_type  = edge_data.get('edge_type', 'local')
 
+                # Log events for drift
+                if ag.strategy == 1 and opp == 1:
+                    round_events['mutual_coop'] += 1
+                elif ag.strategy == 1 and opp == 0:
+                    round_events['suckered'] += 1
+                elif ag.strategy == 0 and opp == 0:
+                    round_events['mutual_defection'] += 1
+                
+                if edge_type == 'random':
+                    if base_payoff > 0 and opp == 1:
+                        round_events['stranger_success'] = True
+                    elif opp == 0:
+                        round_events['stranger_betrayal'] = True
+
                 # --- Subjective Utility Modifiers ---
-                # These must be LARGE (comparable to base payoffs T=1.3, R=1.0)
-                # so they survive degree-normalization and _normalize_rewards.
+                # Moderate strength: enough to differentiate personalities in RL
+                # but not enough to make R > T (which kills defection entirely).
 
                 # 1. Agreeableness: warm-glow for cooperation, guilt for exploitation
                 if ag.strategy == 1 and opp == 1:
-                    base_payoff += (ag.agreeableness - 0.5) * 1.0    # up to ±0.5
+                    base_payoff += (ag.agreeableness - 0.5) * 0.6    # up to ±0.3
                 elif ag.strategy == 0 and opp == 1:
-                    base_payoff -= (ag.agreeableness - 0.5) * 1.0    # guilt penalty
+                    base_payoff -= (ag.agreeableness - 0.5) * 0.6    # guilt penalty
 
                 # 2. Neuroticism: betrayal panic, conflict dread
                 if ag.strategy == 1 and opp == 0:
-                    base_payoff -= (ag.neuroticism - 0.5) * 0.8      # suckered pain
+                    base_payoff -= (ag.neuroticism - 0.5) * 0.5      # suckered pain
                 elif ag.strategy == 0 and opp == 0:
-                    base_payoff -= (ag.neuroticism - 0.5) * 0.6      # conflict stress
+                    base_payoff -= (ag.neuroticism - 0.5) * 0.4      # conflict stress
 
                 # 3. Conscientiousness: values established trust
                 if edge_trust > 0.8:
-                    base_payoff += (ag.conscientiousness - 0.5) * 0.6
+                    base_payoff += (ag.conscientiousness - 0.5) * 0.4
 
                 # 4. Openness: thrill of novel connections
                 if edge_type == 'random':
-                    base_payoff += (ag.openness - 0.5) * 0.8
+                    base_payoff += (ag.openness - 0.5) * 0.5
 
                 # Scale subjective payoff by trust: you earn little from strangers until trust settles
                 ag.add_payoff(base_payoff * edge_trust, opponent_action=opp)
@@ -427,6 +480,11 @@ class SimulationEngine:
             # Normalize by neighbour count for RL
             raw_rewards[i] = ag.round_payoff / n_neighbors
             self.env.update_node_score(node, ag.round_payoff)
+            
+            # --- Dynamic Personality Drift ---
+            # Now that the round is complete for this agent, shift traits slightly
+            round_events['avg_payoff'] = raw_rewards[i]
+            ag.apply_drift(round_events)
 
         # Apply the edge trust changes back to the graph synchronously
         for (u, v), new_trust in edge_trust_updates.items():
@@ -538,11 +596,63 @@ class SimulationEngine:
         return data
 
     def inject_defectors(self, count):
+        """
+        Simulate a real shock: a full psychological trauma injection.
+        Shocked agents are LOCKED into defection for 30 rounds (GCN cannot
+        override). Their neighbors also get a shorter lockout (cascade).
+        """
+        from agent import HISTORY_LEN
+
         cooperators = [n for n in self.agents if self.agents[n].strategy == 1]
         count = min(count, len(cooperators))
-        for node in random.sample(cooperators, count):
-            self.agents[node].strategy = 0
+        shocked_nodes = random.sample(cooperators, count)
+        neighbor_victims = set()
+
+        for node in shocked_nodes:
+            ag = self.agents[node]
+
+            # 1. Flip strategy
+            ag.strategy = 0
             self.env.update_node_state(node, 0)
+
+            # 2. TRAUMA LOCKOUT: forced defection for 30 rounds.
+            #    The GCN CANNOT override this. Simulates real radicalization
+            #    where you can't just "decide" to trust again immediately.
+            ag.trauma_lockout = 30
+
+            # 3. Deep personality trauma
+            ag.personality['neuroticism'] = min(0.95, ag.neuroticism + 0.35)
+            ag.personality['agreeableness'] = max(0.05, ag.agreeableness - 0.35)
+            ag.personality['conscientiousness'] = max(0.05, ag.conscientiousness - 0.1)
+
+            # 4. Shift the baseline (regression anchor) toward traumatized state
+            for dim in ag.personality:
+                ag.baseline_personality[dim] = (
+                    0.4 * ag.baseline_personality[dim] +
+                    0.6 * ag.personality[dim]
+                )
+
+            # 5. Poison action history
+            ag._action_history.clear()
+            ag._action_history.extend([0.0] * HISTORY_LEN)
+
+            # 6. Destroy reputation
+            ag.lifetime_coops = max(0, ag.lifetime_coops - ag.lifetime_steps * 0.5)
+
+            # 7. Shatter trust on all connected edges
+            for nb in self.env.get_neighbors(node):
+                if self.env.graph.has_edge(node, nb):
+                    self.env.graph.edges[node, nb]['edge_trust'] = 0.0
+                neighbor_victims.add(nb)
+
+        # 8. CASCADE: neighbors suffer trauma too
+        neighbor_victims -= set(shocked_nodes)
+        for nb_node in neighbor_victims:
+            nb_ag = self.agents[nb_node]
+            nb_ag.personality['neuroticism'] = min(0.95, nb_ag.neuroticism + 0.08)
+            nb_ag.personality['agreeableness'] = max(0.05, nb_ag.agreeableness - 0.05)
+            # Neighbors get a short lockout too (cascade defection)
+            nb_ag.trauma_lockout = max(nb_ag.trauma_lockout, 8)
 
     def get_random_edge_fraction(self):
         """Returns the fraction of edges that are 'random' (stranger connections)."""

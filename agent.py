@@ -14,9 +14,9 @@ These 5 intrinsic traits combine with 6 emergent behavioral features
 (strategy, payoff, reputation, strategy_trend, payoff_trend, betrayal_rate)
 to form an 11-dimensional state vector fed into the shared GCN.
 
-Personality is assigned at birth (normal distribution centered at 0.5) and
-remains fixed — the GCN learns differentiated strategies purely through
-gradient descent over the personality landscape.
+Personality is allocated via Dirichlet budget (sum = 2.5) at birth, creating
+natural tradeoffs. Traits drift dynamically based on in-game experiences
+(betrayal, cooperation, novelty) and regress toward the baseline over time.
 """
 
 import numpy as np
@@ -28,6 +28,42 @@ HISTORY_LEN = 20   # rolling window length
 OCEAN_DIMS = ['openness', 'agreeableness', 'conscientiousness',
               'extraversion', 'neuroticism']
 
+# ── Personality Budget System ─────────────────────────────────────
+# Total personality 'energy' is fixed. If one trait is high, others
+# must be lower — just like real cognitive resources. This forces
+# genuine tradeoffs and creates natural personality archetypes.
+PERSONALITY_BUDGET = 2.5    # sum of all 5 traits (avg 0.5 each)
+DIRICHLET_ALPHA    = 1.5    # controls spikiness: lower = more extreme archetypes
+
+
+def generate_personality():
+    """
+    Generate a personality vector using Dirichlet budget allocation.
+
+    The Dirichlet distribution generates 5 proportions that sum to 1.0.
+    Multiplying by the budget gives trait values that sum to PERSONALITY_BUDGET.
+
+    Alpha controls the distribution shape:
+      - alpha < 1.0: very spiky (one dominant trait, others near zero)
+      - alpha = 1.0: uniform random simplex
+      - alpha = 1.5: moderate tradeoffs, clear strengths/weaknesses
+      - alpha > 3.0: nearly equal allocation (boring)
+
+    Each trait is soft-clipped to [0.05, 0.95] to avoid degenerate extremes.
+    After clipping, values are renormalized to maintain the budget constraint.
+    """
+    proportions = np.random.dirichlet([DIRICHLET_ALPHA] * len(OCEAN_DIMS))
+    traits = proportions * PERSONALITY_BUDGET
+
+    # Soft-clip: no trait at absolute 0 or 1
+    traits = np.clip(traits, 0.05, 0.95)
+
+    # Renormalize to maintain budget after clipping
+    traits = traits * (PERSONALITY_BUDGET / traits.sum())
+    traits = np.clip(traits, 0.05, 0.95)  # re-clip after renorm
+
+    return {dim: float(traits[i]) for i, dim in enumerate(OCEAN_DIMS)}
+
 
 class NeuralAgent:
     def __init__(self, node_id, strategy=1, max_payoff=6.0, personality=None):
@@ -36,22 +72,25 @@ class NeuralAgent:
             node_id      : Node ID in the network graph.
             strategy     : 1 = Cooperate, 0 = Defect (initial).
             max_payoff   : Rough max possible payoff per round (used for normalization).
-            personality  : Optional dict of OCEAN values. If None, randomly generated.
+            personality  : Optional dict of OCEAN values. If None, randomly generated
+                           using Dirichlet budget allocation.
         """
         self.node_id = node_id
         self.strategy = strategy
         self.max_payoff = max(max_payoff, 1.0)
 
         # ── OCEAN Personality Vector ──────────────────────────────
-        # Each dimension ∈ [0, 1], drawn from N(0.5, 0.2) clipped.
-        # Bell-curve distribution: most agents are moderate, few are extreme.
+        # Budget-allocated: all 5 traits sum to PERSONALITY_BUDGET (2.5).
+        # Forces genuine tradeoffs — high agreeableness means lower
+        # neuroticism/openness/etc., creating natural archetypes.
         if personality is not None:
             self.personality = personality
         else:
-            self.personality = {
-                dim: float(np.clip(np.random.normal(0.5, 0.2), 0.0, 1.0))
-                for dim in OCEAN_DIMS
-            }
+            self.personality = generate_personality()
+            
+        # Store original personality to act as an anchor. 
+        # People drift, but they tend to regress to their core self.
+        self.baseline_personality = dict(self.personality)
 
         # Round-level accounting
         self.round_payoff      = 0.0
@@ -71,6 +110,10 @@ class NeuralAgent:
 
         # Suckered flag (set each round, cleared on reset)
         self.was_suckered = False
+
+        # Trauma lockout: when > 0, agent is forced to defect (GCN cannot override).
+        # Decremented each round. Simulates real trauma recovery time.
+        self.trauma_lockout = 0
 
     # ------------------------------------------------------------------
     # Personality accessors
@@ -155,10 +198,10 @@ class NeuralAgent:
         Typical (0.5 on all): 0.0 (no bias — pure GCN policy).
         """
         bias = (
-            (self.agreeableness - 0.5) * 1.5 +       # strongest driver
-            (self.conscientiousness - 0.5) * 0.8 +    # values long-term gains
-            -(self.neuroticism - 0.5) * 1.2 +         # fear of betrayal
-            (self.openness - 0.5) * 0.3               # risk tolerance
+            (self.agreeableness - 0.5) * 0.5 +       # strongest driver
+            (self.conscientiousness - 0.5) * 0.2 +    # values long-term gains
+            -(self.neuroticism - 0.5) * 0.5 +         # fear of betrayal
+            (self.openness - 0.5) * 0.1               # risk tolerance
         )
         return float(bias)
 
@@ -247,8 +290,88 @@ class NeuralAgent:
         return self.lifetime_coops / self.lifetime_steps
 
     # ------------------------------------------------------------------
-    # Per-round lifecycle
+    # Per-round lifecycle & Dynamic Personality Drift
     # ------------------------------------------------------------------
+
+    def apply_drift(self, events):
+        """
+        Gently shift personality traits based on round experiences, then renormalize.
+        events is a dict with keys:
+          - mutual_coop (int)
+          - suckered (int)
+          - mutual_defection (int)
+          - stranger_success (bool)
+          - stranger_betrayal (bool)
+          - avg_payoff (float)
+          - degree (int)
+        """
+        p = self.personality
+
+        # ── Drift magnitudes are intentionally tiny ──────────────────
+        # Real personality shifts happen over years, not rounds.
+        # These micro-nudges accumulate over hundreds of steps to create
+        # gradual, believable transformations — not instant personality flips.
+        #
+        # CRITICAL: coop and suckered magnitudes MUST be symmetric per-event.
+        # In a mixed neighborhood (3 cooperators, 3 defectors), the net drift
+        # from agreeableness/neuroticism should be exactly zero — otherwise
+        # the entire population spirals toward defection or cooperation.
+        DRIFT = 0.003   # per-event micro-nudge
+
+        # 1. Agreeableness & Neuroticism (symmetric per interaction)
+        coops = events.get('mutual_coop', 0)
+        suckered = events.get('suckered', 0)
+
+        if coops > 0:
+            p['agreeableness'] += DRIFT * coops
+            p['neuroticism']   -= DRIFT * coops
+
+        if suckered > 0:
+            p['agreeableness'] -= DRIFT * suckered
+            p['neuroticism']   += DRIFT * suckered
+
+        # 2. Extraversion (hub dynamics)
+        degree = events.get('degree', 0)
+        avg_payoff = events.get('avg_payoff', 0.0)
+
+        if degree >= self.max_preferred_degree and avg_payoff > 0.5:
+            p['extraversion'] += DRIFT
+        elif degree >= self.max_preferred_degree and avg_payoff < -0.1:
+            p['extraversion'] -= DRIFT
+
+        # 3. Conscientiousness (stability reinforcement)
+        if avg_payoff > 0.8:
+            p['conscientiousness'] += DRIFT * 0.5
+        elif avg_payoff < -0.2:
+            p['conscientiousness'] -= DRIFT * 0.5
+
+        # 3b. Mutual defection: paranoia confirmed, discipline erodes
+        mutual_def = events.get('mutual_defection', 0)
+        if mutual_def > 0:
+            p['neuroticism'] += DRIFT * 0.5 * mutual_def
+            p['conscientiousness'] -= DRIFT * 0.5 * mutual_def
+
+        # 4. Openness (novelty reward/punishment)
+        if events.get('stranger_success'):
+            p['openness'] += DRIFT * 2
+        if events.get('stranger_betrayal'):
+            p['openness'] -= DRIFT * 2
+
+        # 5. Renormalize to maintain PERSONALITY_BUDGET constraint
+        traits = np.array([p[dim] for dim in OCEAN_DIMS])
+        traits = np.clip(traits, 0.05, 0.95)
+        traits = traits * (PERSONALITY_BUDGET / traits.sum())
+        traits = np.clip(traits, 0.05, 0.95)
+
+        for i, dim in enumerate(OCEAN_DIMS):
+            # 6. Regress to Baseline (Anchor) — 15% pull
+            # Personality is elastic: trauma shifts behavior, but you
+            # naturally regress toward your core self over time.
+            # 15% is strong enough to prevent population-wide collapse
+            # while still allowing meaningful drift over 200+ rounds.
+            drifted_val  = float(traits[i])
+            baseline_val = self.baseline_personality[dim]
+            self.personality[dim] = drifted_val * 0.85 + baseline_val * 0.15
 
     def reset_round_payoff(self):
         self.round_payoff = 0.0

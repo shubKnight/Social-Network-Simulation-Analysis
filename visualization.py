@@ -111,7 +111,9 @@ def create_network_figure(env, title="", agents=None, color_by="strategy"):
     node_colors, node_borders, node_text, node_sizes = [], [], [], []
 
     scores = [G.nodes[n].get('score', 0) for n in G.nodes()]
-    max_score = max(scores) if scores and max(scores) > 0 else 1
+    min_score = min(scores) if scores else 0
+    max_score = max(scores) if scores else 0
+    score_range = max_score - min_score if max_score - min_score > 1e-6 else 1.0
 
     color_by_personality = color_by in OCEAN_DIMS and agents is not None
     personality_values = []
@@ -135,8 +137,8 @@ def create_network_figure(env, title="", agents=None, color_by="strategy"):
                 node_borders.append(hex_to_rgba(C['defector'], 0.4))
 
         base_size = 7
-        size_bonus = (score / max_score) * 14 if max_score > 0 else 0
-        node_sizes.append(base_size + size_bonus)
+        size_bonus = ((score - min_score) / score_range) * 14
+        node_sizes.append(max(3, base_size + size_bonus))
 
         # Build tooltip with personality info
         strategy = "Cooperator" if state == 1 else "Defector"
@@ -149,13 +151,19 @@ def create_network_figure(env, title="", agents=None, color_by="strategy"):
         )
         if agents is not None and node in agents:
             ag = agents[node]
+            propensity = ag.cooperation_propensity
+            prop_color = "lime" if propensity > 0 else "salmon"
             tooltip += (
                 f"<br>─── Personality ───<br>"
                 f"Openness: {ag.openness:.2f}<br>"
                 f"Agreeableness: {ag.agreeableness:.2f}<br>"
                 f"Conscientiousness: {ag.conscientiousness:.2f}<br>"
                 f"Extraversion: {ag.extraversion:.2f}<br>"
-                f"Neuroticism: {ag.neuroticism:.2f}"
+                f"Neuroticism: {ag.neuroticism:.2f}<br>"
+                f"─── Derived ───<br>"
+                f"Propensity: <b style='color:{prop_color}'>{propensity:+.2f}</b><br>"
+                f"Reputation: {ag.reputation:.2f}<br>"
+                f"Coop Trend: {ag.strategy_trend:.2f}"
             )
         node_text.append(tooltip)
 

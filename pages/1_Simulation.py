@@ -63,10 +63,10 @@ rewiring_rate = ss("Rewiring Rate", 0.0, 1.0, 0.4, 0.05, "rewiring_rate",
 
 section_label("Payoff Matrix")
 with st.sidebar.expander("T > R > P >= S", expanded=False):
-    T = ss_exp("Temptation (T)", 0.5, 3.0, 1.1, 0.05, "T")
+    T = ss_exp("Temptation (T)", 0.5, 3.0, 1.5, 0.05, "T")
     R = ss_exp("Reward (R)",    0.5, 3.0, 1.0, 0.05, "R")
-    P = ss_exp("Punishment (P)", 0.0, 2.0, 0.0, 0.05, "P")
-    S = ss_exp("Sucker (S)",   -1.0, 1.0, -0.2, 0.05, "S")
+    P = ss_exp("Punishment (P)", 0.0, 2.0, 0.1, 0.05, "P")
+    S = ss_exp("Sucker (S)",   -1.0, 1.0, -0.3, 0.05, "S")
 
 section_label("Visualization")
 color_by = st.sidebar.selectbox(
