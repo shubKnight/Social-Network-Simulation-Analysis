@@ -1,10 +1,12 @@
 import streamlit as st
+from PIL import Image
 from theme import apply_premium_theme, get_colors, render_mode_toggle, styled_header, divider
 
+_favicon = Image.open("favicon.png")
 st.set_page_config(
     layout="wide",
     page_title="Topology of Trust",
-    page_icon="T",
+    page_icon=_favicon,
     initial_sidebar_state="collapsed",
 )
 apply_premium_theme()
@@ -47,10 +49,9 @@ divider()
 # ── Central Question ──────────────────────────────────────────────
 st.markdown(f"""
 <div style="
-    text-align:center;
     padding:28px;
     margin:16px auto;
-    max-width:640px;
+    max-width:800px;
     background:{C['surface']};
     border:1px solid {C['border']};
     border-radius:14px;
@@ -72,8 +73,8 @@ st.markdown(f"<h2 style='text-align:center;margin-bottom:24px;font-size:1.3rem'>
 
 overview_text = f"""
 <div style="
-    max-width:760px;margin:0 auto;
-    padding:22px 26px;
+    max-width:1030px;margin:0 auto;
+    padding:22px 22px;
     background:{C['surface']};
     border:1px solid {C['border']};
     border-radius:12px;
@@ -127,23 +128,28 @@ arch_items = [
      C["defector"]),
 ]
 
-for title, desc, color in arch_items:
-    st.markdown(f"""
-    <div style="
-        display:flex;align-items:flex-start;gap:16px;
-        padding:16px 20px;margin:8px auto;
-        max-width:760px;
-        background:{C['surface']};
-        border-left:3px solid {color};
-        border-radius:8px;
-        box-shadow:{C['card_shadow']};
-    ">
-        <div>
-            <div style="color:{C['text']};font-weight:700;font-size:0.92rem;margin-bottom:6px">{title}</div>
-            <div style="color:{C['text_dim']};font-size:0.82rem;line-height:1.6">{desc}</div>
+# Render Architecture in 2 columns to save vertical space
+arch_cols = st.columns(2)
+for i, (title, desc, color) in enumerate(arch_items):
+    col = arch_cols[i % 2]
+    with col:
+        st.markdown(f"""
+        <div style="
+            display:flex;align-items:flex-start;gap:16px;
+            padding:16px 20px;margin:8px 0;
+            background:{C['surface']};
+            border-left:3px solid {color};
+            border-radius:8px;
+            box-shadow:{C['card_shadow']};
+            height: 100%;
+            min-height: 130px;
+        ">
+            <div>
+                <div style="color:{C['text']};font-weight:700;font-size:0.92rem;margin-bottom:6px">{title}</div>
+                <div style="color:{C['text_dim']};font-size:0.82rem;line-height:1.6">{desc}</div>
+            </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
 # ── Experiment Modules ───────────────────────────────────────────
 divider()

@@ -1,13 +1,15 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+from PIL import Image
 from engine import SimulationEngine
 from visualization import create_phase_transition_chart
 from theme import (apply_premium_theme, get_colors, render_mode_toggle,
                    styled_header, divider, stat_card)
 from visualization import hex_to_rgba
 
-st.set_page_config(layout="wide", page_title="Phase Transition | Topology of Trust", page_icon="T")
+_favicon = Image.open("favicon.png")
+st.set_page_config(layout="wide", page_title="Phase Transition | Topology of Trust", page_icon=_favicon)
 apply_premium_theme()
 render_mode_toggle()
 

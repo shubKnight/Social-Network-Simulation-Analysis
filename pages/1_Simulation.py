@@ -1,6 +1,7 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+from PIL import Image
 from engine import SimulationEngine
 from visualization import (create_network_figure, create_cooperation_chart,
                            create_training_chart, create_personality_radar,
@@ -13,7 +14,8 @@ from agent import OCEAN_DIMS
 from theme import (apply_premium_theme, get_colors, render_mode_toggle,
                    styled_header, divider, stat_card, section_label)
 
-st.set_page_config(layout="wide", page_title="Simulation | Topology of Trust", page_icon="T")
+_favicon = Image.open("favicon.png")
+st.set_page_config(layout="wide", page_title="Simulation | Topology of Trust", page_icon=_favicon)
 apply_premium_theme()
 
 C = get_colors()
@@ -21,14 +23,10 @@ styled_header("Live Simulation", "Real-time multi-agent cooperation dynamics on 
 
 # ── Session-state backed sliders ──────────────────────────────────
 def ss(label, mn, mx, default, step, key, **kw):
-    if key not in st.session_state:
-        st.session_state[key] = default
-    return st.sidebar.slider(label, mn, mx, st.session_state[key], step, key=key, **kw)
+    return st.sidebar.slider(label, mn, mx, value=default, step=step, key=key, **kw)
 
 def ss_exp(label, mn, mx, default, step, key, **kw):
-    if key not in st.session_state:
-        st.session_state[key] = default
-    return st.slider(label, mn, mx, st.session_state[key], step, key=key, **kw)
+    return st.slider(label, mn, mx, value=default, step=step, key=key, **kw)
 
 # ── Sidebar ───────────────────────────────────────────────────────
 render_mode_toggle()

@@ -40,8 +40,8 @@ LIGHT = {
     "text":         "#0f172a",
     "text_dim":     "#334155",
     "text_muted":   "#64748b",
-    "accent":       "#4f46e5",
-    "accent_glow":  "#6366f1",
+    "accent":       "#1e293b",   # Sleek charcoal/black for professional light mode
+    "accent_glow":  "#334155",
     "cooperator":   "#0284c7",
     "defector":     "#e11d48",
     "success":      "#059669",
@@ -50,7 +50,7 @@ LIGHT = {
     "chart_bg":     "rgba(255,255,255,0)",
     "grid":         "rgba(15,23,42,0.08)",
     "card_shadow":  "0 2px 8px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.04)",
-    "hover_shadow": "0 4px 20px rgba(79,70,229,0.12)",
+    "hover_shadow": "0 4px 20px rgba(30,41,59,0.12)",
     "sidebar_bg":   "rgba(255,255,255,0.75)",
     "sidebar_blur": "50px",
 }
@@ -115,10 +115,21 @@ def apply_premium_theme():
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap');
 
     /* ── Root ───────────────────────────────────── */
+    :root, [data-testid="stAppViewContainer"] {{
+        --primary-color: {C["accent"]};
+        --background-color: {C["bg"]};
+        --secondary-background-color: {C["surface"]};
+        --text-color: {C["text"]};
+    }}
     .stApp {{
         background: {app_bg};
         color: {C["text"]};
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    }}
+
+    /* ── Top Header ────────────────────────────── */
+    header[data-testid="stHeader"] {{
+        background: transparent !important;
     }}
 
     /* ── Floating Sidebar ──────────────────────── */
@@ -134,8 +145,18 @@ def apply_premium_theme():
     }}
 
     /* Sidebar typography */
+    section[data-testid="stSidebar"] {{
+        color: {C["text"]} !important;
+    }}
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] div,
+    section[data-testid="stSidebar"] .stMarkdown {{
+        color: {C["text"]};
+    }}
     section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] .stSelectbox label {{
+    section[data-testid="stSidebar"] .stSelectbox label,
+    section[data-testid="stSidebar"] .stSlider label {{
         color: {C["text_dim"]} !important;
         font-size: 0.78rem !important;
         font-weight: 500 !important;
@@ -195,21 +216,23 @@ def apply_premium_theme():
 
     /* ── Buttons ────────────────────────────────── */
     .stButton > button {{
-        background: {C["accent"]};
-        color: white !important;
-        border: none;
+        background: {C["surface"]};
+        color: {C["text"]} !important;
+        border: 1px solid {C["border"]};
         border-radius: 8px;
-        padding: 8px 18px;
-        font-weight: 600;
+        padding: 6px 16px;
+        font-weight: 500;
         font-family: 'Inter', sans-serif;
         font-size: 0.85rem;
         transition: all 0.2s ease;
-        box-shadow: 0 2px 8px {C["accent"]}33;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
     }}
     .stButton > button:hover {{
+        border-color: {C["accent"]};
+        color: {C["accent"]} !important;
         transform: translateY(-1px);
-        box-shadow: 0 4px 16px {C["accent"]}44;
-        filter: brightness(1.1);
+        box-shadow: 0 4px 12px {C["accent"]}22;
+        background: {C["surface_alt"]};
     }}
 
     /* ── Tabs ───────────────────────────────────── */
@@ -241,6 +264,16 @@ def apply_premium_theme():
     .streamlit-expanderHeader {{
         color: {C["text"]} !important;
         font-weight: 500;
+    }}
+
+    /* ── Toggles ────────────────────────────────── */
+    [data-testid="stCheckbox"] {{
+        background: {C["surface_alt"]};
+        border: 1px solid {C["border"]};
+        border-radius: 8px;
+        padding: 8px 14px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        margin-bottom: 8px;
     }}
 
     /* ── Progress Bar ──────────────────────────── */
@@ -304,27 +337,16 @@ def apply_premium_theme():
 
 def render_mode_toggle():
     """Renders a light/dark mode toggle in the sidebar. Call after apply_premium_theme."""
-    C = get_colors()
     mode = _get_mode()
-    label = "Light Mode" if mode == 'dark' else "Dark Mode"
-    icon = "sun" if mode == 'dark' else "moon"
-
-    # Use a styled toggle
-    st.sidebar.markdown(f"""
-    <div style="
-        display:flex; align-items:center; justify-content:space-between;
-        padding:10px 14px; margin:0 0 16px 0;
-        background:{C['surface']};
-        border:1px solid {C['border']};
-        border-radius:8px;
-    ">
-        <span style="color:{C['text_dim']};font-size:0.8rem;font-weight:500">Theme</span>
-        <span style="color:{C['text']};font-size:0.8rem;font-weight:600">{mode.upper()}</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if st.sidebar.button(f"Switch to {label}", use_container_width=True, key="_theme_toggle"):
-        st.session_state.theme_mode = 'light' if mode == 'dark' else 'dark'
+    is_dark = mode == 'dark'
+    
+    st.sidebar.markdown(f"<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
+    
+    # Clean professional toggle, no emojis
+    new_is_dark = st.sidebar.toggle("Dark Mode", value=is_dark, key="theme_toggle_widget")
+    
+    if new_is_dark != is_dark:
+        st.session_state.theme_mode = 'dark' if new_is_dark else 'light'
         st.rerun()
 
 
